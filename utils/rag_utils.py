@@ -331,7 +331,145 @@ def build_rag_context(search_results):
 
 
 # ==============================
-# 8. 파일명 목록 반환
+# 8. RAG 답변 품질 평가
+# ==============================
+
+# 실제 주문/배송/AS 상태를 확정하는 위험 표현
+_ORDER_STATUS_RISK = [
+    "접수되었습니다",
+    "접수 완료되었습니다",
+    "배송 중입니다",
+    "출고되었습니다",
+    "환불 완료되었습니다",
+    "교환 처리되었습니다",
+    "as가 접수되었습니다",
+]
+
+# 가격/재고/이벤트를 단정하는 위험 표현
+_PRICE_STOCK_RISK = [
+    "현재 가격은",
+    "재고가 있습니다",
+    "품절입니다",
+    "이벤트 진행 중입니다",
+    "프로모션 중입니다",
+]
+
+# 개인정보 입력을 직접 요구하는 위험 표현
+# "입력하지 마세요" 같은 안전 안내와 구분하기 위해 "해주세요" 형태만 체크한다.
+_PRIVACY_RISK = [
+    "주문번호를 입력해주세요",
+    "연락처를 입력해주세요",
+    "주소를 입력해주세요",
+    "개인정보를 입력해주세요",
+]
+
+
+def evaluate_rag_answer(answer: str, source_files: list) -> dict:
+    """
+    RAG 답변의 기본 품질을 점검한다.
+
+    점검 항목:
+    1. 답변에 "참고 문서" 섹션이 있는지
+    2. source_files 중 하나 이상이 답변에 포함되어 있는지
+    3. 주문/배송/AS 상태를 확정하는 위험 표현이 있는지
+    4. 가격/재고/이벤트를 단정하는 위험 표현이 있는지
+    5. 개인정보 입력을 직접 요구하는 위험 표현이 있는지
+    6. 답변 길이가 100자 이상인지
+
+    반환 형태:
+    {
+        "score": 0~100,
+        "status": "좋음" | "주의" | "위험",
+        "checks": [{"name": str, "passed": bool, "message": str}, ...]
+    }
+    """
+    answer_lower = answer.lower()
+    checks = []
+    score = 100
+
+    # 1. 참고 문서 섹션 여부
+    has_ref = "참고 문서" in answer
+    checks.append({
+        "name": "참고 문서 표시",
+        "passed": has_ref,
+        "message": "참고 문서 섹션이 포함되어 있습니다." if has_ref
+                   else "참고 문서 섹션이 없습니다. (-20점)",
+    })
+    if not has_ref:
+        score -= 20
+
+    # 2. 출처 파일명 포함 여부
+    has_source = any(f.lower() in answer_lower for f in source_files)
+    checks.append({
+        "name": "출처 파일명 포함",
+        "passed": has_source,
+        "message": "출처 파일명이 답변에 포함되어 있습니다." if has_source
+                   else "출처 파일명이 답변에 없습니다. (-20점)",
+    })
+    if not has_source:
+        score -= 20
+
+    # 3. 주문/배송/AS 상태 단정 위험 표현
+    order_hits = [p for p in _ORDER_STATUS_RISK if p in answer_lower]
+    order_safe = len(order_hits) == 0
+    checks.append({
+        "name": "주문/배송/AS 상태 단정",
+        "passed": order_safe,
+        "message": "주문·배송·AS 상태를 단정하는 표현이 없습니다." if order_safe
+                   else f"위험 표현 발견: {', '.join(order_hits)} (-15점)",
+    })
+    if not order_safe:
+        score -= 15
+
+    # 4. 가격/재고 단정 위험 표현
+    price_hits = [p for p in _PRICE_STOCK_RISK if p in answer_lower]
+    price_safe = len(price_hits) == 0
+    checks.append({
+        "name": "가격/재고 단정",
+        "passed": price_safe,
+        "message": "가격·재고를 단정하는 표현이 없습니다." if price_safe
+                   else f"위험 표현 발견: {', '.join(price_hits)} (-15점)",
+    })
+    if not price_safe:
+        score -= 15
+
+    # 5. 개인정보 입력 직접 요구
+    privacy_hits = [p for p in _PRIVACY_RISK if p in answer_lower]
+    privacy_safe = len(privacy_hits) == 0
+    checks.append({
+        "name": "개인정보 유도",
+        "passed": privacy_safe,
+        "message": "개인정보 입력을 요구하는 표현이 없습니다." if privacy_safe
+                   else f"위험 표현 발견: {', '.join(privacy_hits)} (-15점)",
+    })
+    if not privacy_safe:
+        score -= 15
+
+    # 6. 답변 충분성 (100자 이상)
+    long_enough = len(answer) >= 100
+    checks.append({
+        "name": "답변 충분성",
+        "passed": long_enough,
+        "message": f"답변 길이가 충분합니다. ({len(answer)}자)" if long_enough
+                   else f"답변이 너무 짧습니다. ({len(answer)}자, -10점)",
+    })
+    if not long_enough:
+        score -= 10
+
+    score = max(0, score)
+
+    if score >= 80:
+        status = "좋음"
+    elif score >= 60:
+        status = "주의"
+    else:
+        status = "위험"
+
+    return {"score": score, "status": status, "checks": checks}
+
+
+# ==============================
+# 9. 파일명 목록 반환
 # ==============================
 
 def get_source_file_names(search_results):
@@ -340,7 +478,7 @@ def get_source_file_names(search_results):
 
 
 # ==============================
-# 9. 콘솔 출력용 포맷
+# 10. 콘솔 출력용 포맷
 # ==============================
 
 def format_search_results_for_display(search_results):

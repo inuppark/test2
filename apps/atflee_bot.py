@@ -16,6 +16,7 @@ from utils.rag_utils import (
     build_rag_context,
     get_source_file_names,
     format_search_results_for_display,
+    evaluate_rag_answer,
     TOP_K,
 )
 
@@ -209,6 +210,16 @@ if user_question:
                     # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
                     answer = ask_docent(user_question, rag_context, source_files)
                     st.write(answer)
+
+                    # 4단계: 답변 품질을 체크한다.
+                    evaluation = evaluate_rag_answer(answer, source_files)
+                    with st.expander("답변 품질 체크"):
+                        st.write(f"점수: {evaluation['score']}점 / 상태: {evaluation['status']}")
+                        for check in evaluation["checks"]:
+                            if check["passed"]:
+                                st.success(f"✔ {check['name']}: {check['message']}")
+                            else:
+                                st.warning(f"△ {check['name']}: {check['message']}")
 
                     st.session_state.docent_messages.append(
                         {"role": "assistant", "content": answer}

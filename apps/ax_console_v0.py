@@ -17,6 +17,7 @@ from utils.rag_utils import (
     build_rag_context,
     get_source_file_names,
     format_search_results_for_display,
+    evaluate_rag_answer,
     TOP_K,
 )
 
@@ -587,6 +588,16 @@ with tab_atflee:
                         # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
                         atflee_reply = ask_atflee_bot(atflee_user_input, atflee_rag_context, atflee_source_files)
                         st.write(atflee_reply)
+
+                        # 4단계: 답변 품질을 체크한다.
+                        atflee_eval = evaluate_rag_answer(atflee_reply, atflee_source_files)
+                        with st.expander("답변 품질 체크"):
+                            st.write(f"점수: {atflee_eval['score']}점 / 상태: {atflee_eval['status']}")
+                            for check in atflee_eval["checks"]:
+                                if check["passed"]:
+                                    st.success(f"✔ {check['name']}: {check['message']}")
+                                else:
+                                    st.warning(f"△ {check['name']}: {check['message']}")
 
                         st.session_state.atflee_bot_messages.append(
                             {

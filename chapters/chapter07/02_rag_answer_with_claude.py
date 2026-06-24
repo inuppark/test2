@@ -16,6 +16,7 @@ from utils.rag_utils import (
     search_wiki,
     build_rag_context,
     get_source_file_names,
+    evaluate_rag_answer,
     TOP_K,
 )
 
@@ -171,4 +172,15 @@ print("\n[Claude 답변 생성 중...]\n")
 answer = ask_claude_with_rag(question, rag_context, source_files)
 
 print(answer)
+
+# 4단계: 답변 품질을 체크한다.
+evaluation = evaluate_rag_answer(answer, source_files)
+
 print("\n" + "=" * 60)
+print("[답변 품질 체크]")
+print(f"점수: {evaluation['score']}점  /  상태: {evaluation['status']}")
+print("-" * 40)
+for check in evaluation["checks"]:
+    mark = "통과" if check["passed"] else "주의"
+    print(f"  [{mark}] {check['name']}: {check['message']}")
+print("=" * 60)
