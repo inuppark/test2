@@ -1,8 +1,15 @@
 import os
+import sys
 import json
 import streamlit as st
 from dotenv import load_dotenv
 from anthropic import Anthropic
+
+# Streamlit Cloud는 apps/ 하위를 실행 디렉토리로 삼아 프로젝트 루트를 못 찾는 경우가 있다.
+# 이 파일 위치(apps/)의 한 단계 위가 프로젝트 루트이므로 sys.path에 명시적으로 추가한다.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 # utils.rag_utils에서 앳플리 봇 RAG 공통 함수를 가져온다.
 from utils.rag_utils import (
