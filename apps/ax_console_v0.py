@@ -248,6 +248,8 @@ atflee_system_prompt = """
 # Rules
 - <rag_context>에 있는 정보만 확정적으로 말한다.
 - <rag_context>에 없는 내용은 추측하지 않는다.
+- <rag_context> 안에 [관련 스니펫]이 포함되어 있으면 해당 부분을 우선 참고한다.
+- 단, 스니펫만 보고 단정하지 말고 [문서 전체] 내용과 함께 판단한다.
 - 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
 - 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
 - 정책, 보증, 교환/환불, AS 조건은 확실하지 않으면 "정확한 확인이 필요합니다"라고 말한다.
@@ -258,7 +260,7 @@ atflee_system_prompt = """
 
 # Process
 1. 사용자 질문의 의도를 파악한다.
-2. <rag_context>에서 관련 근거를 찾는다.
+2. <rag_context>의 [관련 스니펫]을 먼저 확인하고, [문서 전체]와 함께 근거를 찾는다.
 3. 확실한 정보와 확인이 필요한 정보를 구분한다.
 4. 사용자가 바로 할 수 있는 행동을 안내한다.
 5. 마지막에 참고한 문서명을 표시한다.
@@ -569,10 +571,11 @@ with tab_atflee:
                         atflee_rag_context = build_rag_context(atflee_search_results)
                         atflee_source_files = get_source_file_names(atflee_search_results)
 
-                        # 검색된 참고 문서를 expander로 표시한다.
+                        # 검색된 참고 문서와 관련 스니펫을 expander로 표시한다.
                         with st.expander("검색된 참고 문서"):
                             for result in atflee_search_results:
-                                st.write(f"- {result['file_name']} / 점수: {result['score']}")
+                                st.markdown(f"**{result['file_name']}** / 점수: {result['score']}")
+                                st.caption(result.get("snippet", ""))
 
                         # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
                         atflee_reply = ask_atflee_bot(atflee_user_input, atflee_rag_context, atflee_source_files)

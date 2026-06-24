@@ -1,4 +1,12 @@
 import os
+import sys
+
+# 어느 디렉토리에서 실행해도 프로젝트 루트(utils 패키지가 있는 곳)를 찾을 수 있게 한다.
+# 이 파일 위치: chapters/chapter07/ → 두 단계 위가 프로젝트 루트다.
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from dotenv import load_dotenv
 from anthropic import Anthropic
 
@@ -51,6 +59,8 @@ system_prompt = """
 # Rules
 - <rag_context>에 있는 정보만 확정적으로 말한다.
 - <rag_context>에 없는 내용은 추측하지 않는다.
+- <rag_context> 안에 [관련 스니펫]이 포함되어 있으면 해당 부분을 우선 참고한다.
+- 단, 스니펫만 보고 단정하지 말고 [문서 전체] 내용과 함께 판단한다.
 - 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
 - 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
 - 정책, 보증, 교환/환불, AS 조건은 확실하지 않으면 "정확한 확인이 필요합니다"라고 말한다.
@@ -60,7 +70,7 @@ system_prompt = """
 
 # Process
 1. 사용자 질문의 의도를 파악한다.
-2. <rag_context>에서 관련 근거를 찾는다.
+2. <rag_context>의 [관련 스니펫]을 먼저 확인하고, [문서 전체]와 함께 근거를 찾는다.
 3. 확실한 정보와 확인이 필요한 정보를 구분한다.
 4. 사용자가 바로 할 수 있는 행동을 안내한다.
 5. 마지막에 참고한 문서명을 표시한다.
@@ -116,12 +126,16 @@ def ask_claude_with_rag(question, rag_context, source_files):
 # ==============================
 
 def print_search_results(results):
-    """검색된 문서 목록과 점수를 출력한다."""
+    """검색된 문서 목록, 점수, 관련 스니펫을 출력한다."""
     print("\n[검색된 문서]")
     print("-" * 40)
 
     for rank, doc in enumerate(results, start=1):
         print(f"  {rank}위. {doc['file_name']}  (점수: {doc['score']})")
+        snippet = doc.get("snippet", "")
+        if snippet:
+            one_line = snippet.replace("\n", " ")
+            print(f"  스니펫: {one_line}")
 
     print("-" * 40)
 

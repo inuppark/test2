@@ -206,7 +206,58 @@ def score_document(question, document_content):
 
 
 # ==============================
-# 5. 위키 검색
+# 5. 관련 스니펫 추출
+# ==============================
+
+def extract_relevant_snippet(question, document_content, max_chars=300):
+    """
+    질문과 가장 관련 있어 보이는 문서 일부를 추출한다.
+
+    처리 순서:
+    1. 질문을 토큰화하고 동의어 확장한다.
+    2. 문서를 줄 단위로 나눈다 (빈 줄 제외).
+    3. 각 줄과 확장 토큰의 교집합 크기로 점수를 계산한다.
+    4. 점수가 가장 높은 줄 앞뒤 1줄을 합쳐 스니펫을 만든다.
+    5. max_chars를 초과하면 잘라내고 "..."를 붙인다.
+    6. 모든 점수가 0이면 문서 앞부분 max_chars를 반환한다.
+    """
+    expanded_tokens = expand_tokens(tokenize(question))
+
+    # 빈 줄은 제외하고 줄 단위로 분리
+    lines = [line for line in document_content.splitlines() if line.strip()]
+
+    if not lines:
+        snippet = document_content[:max_chars]
+        return snippet + "..." if len(document_content) > max_chars else snippet
+
+    # 각 줄에 점수 부여
+    line_scores = [
+        len(expanded_tokens.intersection(set(tokenize(line))))
+        for line in lines
+    ]
+
+    best_score = max(line_scores)
+
+    # 모든 점수가 0이면 문서 앞부분 반환
+    if best_score == 0:
+        snippet = document_content[:max_chars]
+        return snippet + "..." if len(document_content) > max_chars else snippet
+
+    best_idx = line_scores.index(best_score)
+
+    # 최고 점수 줄 앞뒤 1줄씩 포함
+    start = max(0, best_idx - 1)
+    end = min(len(lines), best_idx + 2)
+    snippet = "\n".join(lines[start:end])
+
+    if len(snippet) > max_chars:
+        snippet = snippet[:max_chars] + "..."
+
+    return snippet
+
+
+# ==============================
+# 6. 위키 검색
 # ==============================
 
 def search_wiki(question, top_k=TOP_K, wiki_dir=WIKI_DIR):
@@ -221,18 +272,20 @@ def search_wiki(question, top_k=TOP_K, wiki_dir=WIKI_DIR):
     단, 모든 문서 점수가 0이면 파일명 기준 상위 top_k를 fallback으로 반환한다.
 
     반환 형태:
-    [{"file_name": ..., "content": ..., "score": ...}, ...]
+    [{"file_name": ..., "content": ..., "score": ..., "snippet": ...}, ...]
     """
     documents = load_wiki_documents(wiki_dir)
 
     scored = []
     for doc in documents:
         score = score_document(question, doc["content"])
+        snippet = extract_relevant_snippet(question, doc["content"])
         scored.append(
             {
                 "file_name": doc["file_name"],
                 "content": doc["content"],
-                "score": score
+                "score": score,
+                "snippet": snippet,
             }
         )
 
@@ -250,26 +303,35 @@ def search_wiki(question, top_k=TOP_K, wiki_dir=WIKI_DIR):
 
 
 # ==============================
-# 6. RAG Context 조합
+# 7. RAG Context 조합
 # ==============================
 
 def build_rag_context(search_results):
     """
     검색된 문서들을 하나의 문자열로 합친다.
-    각 문서 앞에 출처 파일명을 붙여 Claude가 근거를 파악할 수 있게 한다.
+    [관련 스니펫]을 먼저 제시해 Claude가 핵심 근거를 빠르게 파악하도록 한다.
+    그 다음 [문서 전체]를 붙여 전체 맥락도 활용할 수 있게 한다.
     """
     context_parts = []
 
     for result in search_results:
-        context_parts.append(
-            f"[문서명: {result['file_name']}]\n{result['content']}"
-        )
+        snippet = result.get("snippet", "")
+        if snippet:
+            block = (
+                f"[문서명: {result['file_name']}]\n"
+                f"[관련 스니펫]\n{snippet}\n\n"
+                f"[문서 전체]\n{result['content']}"
+            )
+        else:
+            block = f"[문서명: {result['file_name']}]\n{result['content']}"
+
+        context_parts.append(block)
 
     return "\n\n---\n\n".join(context_parts)
 
 
 # ==============================
-# 7. 파일명 목록 반환
+# 8. 파일명 목록 반환
 # ==============================
 
 def get_source_file_names(search_results):
@@ -278,15 +340,27 @@ def get_source_file_names(search_results):
 
 
 # ==============================
-# 8. Streamlit 표시용 포맷
+# 9. 콘솔 출력용 포맷
 # ==============================
 
 def format_search_results_for_display(search_results):
     """
-    Streamlit expander 표시용 문자열 리스트를 반환한다.
-    예: ["- atflee_app_guide.md / 점수: 5", ...]
-    """
-    return [
-        f"- {result['file_name']} / 점수: {result['score']}"
-        for result in search_results
+    콘솔/Streamlit expander 표시용 문자열 리스트를 반환한다.
+    파일명, 점수, 스니펫을 포함한다.
+
+    반환 예:
+    [
+        "- atflee_app_guide.md / 점수: 7",
+        "  관련 내용: 블루투스 연결이 안 될 때는...",
+        ...
     ]
+    """
+    lines = []
+    for result in search_results:
+        lines.append(f"- {result['file_name']} / 점수: {result['score']}")
+        snippet = result.get("snippet", "")
+        if snippet:
+            # 줄바꿈을 공백으로 바꿔 한 줄로 출력한다.
+            one_line = snippet.replace("\n", " ")
+            lines.append(f"  관련 내용: {one_line}")
+    return lines
