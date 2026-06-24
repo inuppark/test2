@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import streamlit as st
 from dotenv import load_dotenv
@@ -225,6 +226,211 @@ def generate_cs_reply(customer_message):
     )
 
 
+# ==============================
+# 앳플리 봇 RAG 설정값
+# ==============================
+
+WIKI_DIR = "data/wiki"
+TOP_K = 3
+
+
+def load_wiki_documents():
+    """
+    data/wiki 폴더의 .md 파일을 모두 읽어
+    [{"file_name": 파일명, "content": 내용}, ...] 형태로 반환한다.
+    """
+    documents = []
+
+    if not os.path.exists(WIKI_DIR):
+        return documents
+
+    for file_name in os.listdir(WIKI_DIR):
+        if file_name.endswith(".md"):
+            file_path = os.path.join(WIKI_DIR, file_name)
+
+            with open(file_path, "r", encoding="utf-8") as file:
+                documents.append(
+                    {
+                        "file_name": file_name,
+                        "content": file.read()
+                    }
+                )
+
+    return documents
+
+
+def tokenize(text):
+    """
+    텍스트를 소문자로 바꾸고 단어 단위로 나눈다.
+    한글, 영어, 숫자 이외의 문자는 공백으로 처리하고 2글자 미만 토큰은 제거한다.
+    """
+    text = text.lower()
+
+    cleaned_chars = []
+
+    for char in text:
+        if char.isalnum() or char.isspace():
+            cleaned_chars.append(char)
+        else:
+            cleaned_chars.append(" ")
+
+    cleaned_text = "".join(cleaned_chars)
+
+    tokens = cleaned_text.split()
+
+    tokens = [token for token in tokens if len(token) >= 2]
+
+    return tokens
+
+
+def score_document(question, document_content):
+    """
+    질문 토큰과 문서 토큰의 교집합 크기를 점수로 반환한다.
+    set을 사용해 중복 카운트를 방지한다.
+    """
+    question_tokens = set(tokenize(question))
+    document_tokens = set(tokenize(document_content))
+
+    if not question_tokens or not document_tokens:
+        return 0
+
+    score = len(question_tokens.intersection(document_tokens))
+
+    return score
+
+
+def search_wiki(question, top_k=TOP_K):
+    """
+    질문과 관련도가 높은 문서를 top_k개 반환한다.
+    점수가 같으면 파일명 오름차순으로 정렬해 결과가 일정하게 나온다.
+    """
+    documents = load_wiki_documents()
+
+    scored_documents = []
+
+    for document in documents:
+        score = score_document(question, document["content"])
+
+        scored_documents.append(
+            {
+                "file_name": document["file_name"],
+                "content": document["content"],
+                "score": score
+            }
+        )
+
+    scored_documents.sort(
+        key=lambda item: (-item["score"], item["file_name"])
+    )
+
+    return scored_documents[:top_k]
+
+
+def build_rag_context(search_results):
+    """
+    검색된 문서들을 하나의 문자열로 합친다.
+    각 문서 앞에 파일명 출처를 붙인다.
+    """
+    context_parts = []
+
+    for result in search_results:
+        context_parts.append(
+            f"[문서명: {result['file_name']}]\n{result['content']}"
+        )
+
+    return "\n\n---\n\n".join(context_parts)
+
+
+def get_source_file_names(search_results):
+    """검색된 문서의 파일명 목록을 반환한다."""
+    return [result["file_name"] for result in search_results]
+
+
+atple_system_prompt = """
+# Role
+너는 앳플리 위키 기반 RAG 답변 봇이다.
+
+# Goal
+사용자 질문에 대해 검색된 앳플리 위키 문서를 근거로 정확하고 친절하게 답변한다.
+
+# Context
+너에게 제공되는 <rag_context>는 data/wiki 문서 중 사용자 질문과 관련도가 높은 문서만 검색해서 가져온 것이다.
+너는 이 문서 내용을 우선 근거로 사용한다.
+
+# Rules
+- <rag_context>에 있는 정보만 확정적으로 말한다.
+- <rag_context>에 없는 내용은 추측하지 않는다.
+- 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
+- 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
+- 정책, 보증, 교환/환불, AS 조건은 확실하지 않으면 "정확한 확인이 필요합니다"라고 말한다.
+- 개인정보, 주문번호, 연락처 등 민감정보는 공개 채팅에 입력하지 않도록 안내한다.
+- 고객이 바로 해볼 수 있는 다음 행동을 안내한다.
+- 답변은 초보자도 이해할 수 있게 쉽게 작성한다.
+- 제품 사용법은 가능한 경우 사용자 매뉴얼과 문제 해결 FAQ 확인을 함께 안내한다.
+
+# Process
+1. 사용자 질문의 의도를 파악한다.
+2. <rag_context>에서 관련 근거를 찾는다.
+3. 확실한 정보와 확인이 필요한 정보를 구분한다.
+4. 사용자가 바로 할 수 있는 행동을 안내한다.
+5. 마지막에 참고한 문서명을 표시한다.
+
+# Output Format
+아래 형식으로 답변한다.
+
+1. 간단한 답변
+2. 근거가 되는 앳플리 위키 정보
+3. 바로 해볼 수 있는 것
+4. 확인이 필요한 것
+5. 참고 문서
+"""
+
+
+def build_atple_messages(user_question, rag_context, source_files):
+    """
+    앳플리 봇 탭용 messages를 구성한다.
+    새 질문에는 RAG로 검색된 문서만 rag_context로 전달한다.
+    이전 대화 내역도 함께 전달해 맥락을 유지한다.
+    """
+    prompt = f"""
+<rag_context>
+{rag_context}
+</rag_context>
+
+<source_files>
+{", ".join(source_files)}
+</source_files>
+
+<user_question>
+{user_question}
+</user_question>
+"""
+
+    messages = []
+
+    for message in st.session_state.atple_bot_messages:
+        messages.append(message)
+
+    messages.append({"role": "user", "content": prompt})
+
+    return messages
+
+
+def ask_atple_bot(user_question, rag_context, source_files):
+    """
+    RAG로 검색된 문서를 Context로 Claude에게 전달하고 답변을 받는다.
+    """
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=1200,
+        temperature=0.2,
+        system=atple_system_prompt,
+        messages=build_atple_messages(user_question, rag_context, source_files)
+    )
+
+    return response.content[0].text
+
+
 def call_ax_tutor(messages):
     """
     대화 기억이 있는 앳플리 AX 학습 챗봇용 Claude 호출 함수.
@@ -273,7 +479,7 @@ def call_ax_tutor(messages):
 st.title("앳플리 AX Console v0")
 st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
 
-tab_chat, tab_voc, tab_cs = st.tabs(["AX 학습 챗봇", "VOC 분석", "CS 답변 초안"])
+tab_chat, tab_voc, tab_cs, tab_atple = st.tabs(["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇"])
 
 
 # =========================
@@ -428,3 +634,68 @@ AS 문의도 남겼는데 답변이 늦어서 너무 답답합니다."""
 
                 except Exception as error:
                     st.error(f"CS 답변 생성 중 오류가 발생했습니다: {error}")
+
+
+# =========================
+# 4. 앳플리 봇 탭
+# =========================
+with tab_atple:
+    st.subheader("앳플리 봇")
+    st.write("질문과 관련 있는 data/wiki 문서를 검색해 답변합니다.")
+    st.info("현재 앳플리 봇은 data/wiki 문서와 공식몰 공개 정보를 바탕으로 답변합니다.")
+
+    if "atple_bot_messages" not in st.session_state:
+        st.session_state.atple_bot_messages = []
+
+    if st.button("앳플리 봇 대화 초기화", key="atple_reset"):
+        st.session_state.atple_bot_messages = []
+        st.rerun()
+
+    for message in st.session_state.atple_bot_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+
+    atple_user_input = st.chat_input("앳플리 제품/앱/정책에 대해 질문해보세요", key="atple_chat_input")
+
+    if atple_user_input:
+        st.session_state.atple_bot_messages.append(
+            {
+                "role": "user",
+                "content": atple_user_input
+            }
+        )
+
+        with st.chat_message("user"):
+            st.write(atple_user_input)
+
+        with st.chat_message("assistant"):
+            with st.spinner("앳플리 봇이 답변 중입니다..."):
+                try:
+                    # 1단계: 질문과 관련 있는 문서를 검색한다.
+                    atple_search_results = search_wiki(atple_user_input, top_k=TOP_K)
+
+                    if not atple_search_results:
+                        st.warning("data/wiki 폴더에 문서가 없어 답변을 생성할 수 없습니다.")
+                    else:
+                        # 2단계: 검색된 문서만 RAG Context로 합친다.
+                        atple_rag_context = build_rag_context(atple_search_results)
+                        atple_source_files = get_source_file_names(atple_search_results)
+
+                        # 검색된 참고 문서를 expander로 표시한다.
+                        with st.expander("검색된 참고 문서"):
+                            for result in atple_search_results:
+                                st.write(f"- {result['file_name']} / 점수: {result['score']}")
+
+                        # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
+                        atple_reply = ask_atple_bot(atple_user_input, atple_rag_context, atple_source_files)
+                        st.write(atple_reply)
+
+                        st.session_state.atple_bot_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": atple_reply
+                            }
+                        )
+
+                except Exception as error:
+                    st.error(f"앳플리 봇 답변 생성 중 오류가 발생했습니다: {error}")
