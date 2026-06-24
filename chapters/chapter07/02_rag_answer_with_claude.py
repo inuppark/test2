@@ -1,7 +1,15 @@
 import os
-import re
 from dotenv import load_dotenv
 from anthropic import Anthropic
+
+# utils.rag_utils에서 RAG 공통 함수를 가져온다.
+# 7-4부터는 중복 구현 대신 공통 모듈을 사용한다.
+from utils.rag_utils import (
+    search_wiki,
+    build_rag_context,
+    get_source_file_names,
+    TOP_K,
+)
 
 # .env 파일에서 환경변수를 불러온다.
 load_dotenv()
@@ -10,8 +18,6 @@ load_dotenv()
 # 설정값
 # ==============================
 
-WIKI_DIR = "data/wiki"
-TOP_K = 3
 model_name = "claude-sonnet-4-5"
 
 # ==============================
@@ -71,139 +77,7 @@ system_prompt = """
 
 
 # ==============================
-# 1. 문서 로드 함수
-# ==============================
-
-def load_wiki_documents():
-    """
-    data/wiki 폴더 안의 .md 파일을 모두 읽어
-    [{"file_name": 파일명, "content": 내용}, ...] 형태로 반환한다.
-    """
-    if not os.path.exists(WIKI_DIR):
-        print(f"[오류] '{WIKI_DIR}' 폴더를 찾을 수 없습니다.")
-        print("프로젝트 루트 디렉토리에서 실행하고 있는지 확인해주세요.")
-        return []
-
-    documents = []
-
-    for file_name in sorted(os.listdir(WIKI_DIR)):
-        if not file_name.endswith(".md"):
-            continue
-
-        file_path = os.path.join(WIKI_DIR, file_name)
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            documents.append({
-                "file_name": file_name,
-                "content": content
-            })
-
-        except Exception as e:
-            print(f"[경고] '{file_name}' 파일을 읽는 중 오류가 발생했습니다: {e}")
-
-    return documents
-
-
-# ==============================
-# 2. 텍스트 토큰화 함수
-# ==============================
-
-def tokenize(text):
-    """
-    텍스트를 단어 단위 토큰 리스트로 변환한다.
-    한글, 영어, 숫자가 섞여도 기본적으로 처리할 수 있게 한다.
-    """
-    # 소문자로 변환 (영어 대소문자 통일)
-    text = text.lower()
-
-    # 한글/영어/숫자/공백 이외의 문자를 공백으로 변환
-    text = re.sub(r"[^\w\s가-힣]", " ", text)
-
-    # 공백 기준으로 단어를 나눈다.
-    tokens = text.split()
-
-    # 1글자 이하 토큰은 노이즈가 많으므로 제거한다.
-    tokens = [t for t in tokens if len(t) > 1]
-
-    return tokens
-
-
-# ==============================
-# 3. 문서 관련도 점수 계산 함수
-# ==============================
-
-def score_document(question, document_content):
-    """
-    질문과 문서 사이의 키워드 겹침 점수를 계산한다.
-    set을 사용하므로 같은 단어가 문서에 여러 번 나와도 1번으로 계산한다.
-    """
-    question_tokens = tokenize(question)
-    document_token_set = set(tokenize(document_content))
-
-    score = 0
-    for token in question_tokens:
-        if token in document_token_set:
-            score += 1
-
-    return score
-
-
-# ==============================
-# 4. 위키 검색 함수
-# ==============================
-
-def search_wiki(question, top_k=TOP_K):
-    """
-    질문과 관련 있는 문서를 키워드 기반으로 검색해 반환한다.
-    점수가 같으면 파일명 알파벳 순서로 정렬해 결과가 일정하게 나오게 한다.
-    """
-    documents = load_wiki_documents()
-
-    if not documents:
-        print("[안내] data/wiki 폴더에 .md 문서가 없습니다.")
-        return []
-
-    scored_documents = []
-
-    for doc in documents:
-        score = score_document(question, doc["content"])
-        scored_documents.append({
-            "file_name": doc["file_name"],
-            "content": doc["content"],
-            "score": score
-        })
-
-    # 점수 내림차순, 점수가 같으면 파일명 오름차순으로 정렬
-    scored_documents.sort(key=lambda x: (-x["score"], x["file_name"]))
-
-    return scored_documents[:top_k]
-
-
-# ==============================
-# 5. RAG Context 조합 함수
-# ==============================
-
-def build_rag_context(search_results):
-    """
-    검색된 문서들을 하나의 문자열로 합친다.
-    각 문서 앞에 출처 파일명을 붙여 Claude가 출처를 파악할 수 있게 한다.
-    """
-    context_parts = []
-
-    for doc in search_results:
-        # 각 문서 앞에 파일명 출처 표시를 붙인다.
-        part = f"[문서명: {doc['file_name']}]\n{doc['content']}"
-        context_parts.append(part)
-
-    # 문서 사이는 구분선으로 나눈다.
-    return "\n\n---\n\n".join(context_parts)
-
-
-# ==============================
-# 6. Claude RAG 답변 함수
+# Claude RAG 답변 함수
 # ==============================
 
 def ask_claude_with_rag(question, rag_context, source_files):
@@ -212,18 +86,18 @@ def ask_claude_with_rag(question, rag_context, source_files):
     XML 태그로 rag_context와 user_question을 구분한다.
     source_files는 참고 문서명 목록이다.
     """
-    # XML 태그로 Context와 질문을 구분해 Claude가 명확히 인식하게 한다.
     user_prompt = f"""
 <rag_context>
 {rag_context}
 </rag_context>
 
+<source_files>
+{", ".join(source_files)}
+</source_files>
+
 <user_question>
 {question}
 </user_question>
-
-참고: 위 답변의 5번 항목 '참고 문서'에는 아래 파일명을 반드시 포함해줘.
-{", ".join(source_files)}
 """
 
     response = client.messages.create(
@@ -231,12 +105,7 @@ def ask_claude_with_rag(question, rag_context, source_files):
         max_tokens=1200,
         temperature=0.2,
         system=system_prompt,
-        messages=[
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ]
+        messages=[{"role": "user", "content": user_prompt}]
     )
 
     return response.content[0].text
@@ -247,9 +116,7 @@ def ask_claude_with_rag(question, rag_context, source_files):
 # ==============================
 
 def print_search_results(results):
-    """
-    검색된 문서 목록과 점수를 출력한다.
-    """
+    """검색된 문서 목록과 점수를 출력한다."""
     print("\n[검색된 문서]")
     print("-" * 40)
 
@@ -270,7 +137,7 @@ print("=" * 60)
 print(f"질문: {question}")
 print("=" * 60)
 
-# 1단계: 질문과 관련 있는 문서를 검색한다.
+# 1단계: utils.rag_utils의 search_wiki로 관련 문서를 검색한다.
 search_results = search_wiki(question, top_k=TOP_K)
 
 if not search_results:
@@ -282,9 +149,7 @@ print_search_results(search_results)
 
 # 2단계: 검색된 문서만 하나의 Context로 합친다.
 rag_context = build_rag_context(search_results)
-
-# 참고 문서명 목록 추출
-source_files = [doc["file_name"] for doc in search_results]
+source_files = get_source_file_names(search_results)
 
 # 3단계: Claude에게 검색된 문서를 넘기고 답변을 받는다.
 print("\n[Claude 답변 생성 중...]\n")

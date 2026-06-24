@@ -1,8 +1,16 @@
 import os
-import re
 import streamlit as st
 from dotenv import load_dotenv
 from anthropic import Anthropic
+
+# utils.rag_utils에서 RAG 공통 함수를 가져온다.
+from utils.rag_utils import (
+    search_wiki,
+    build_rag_context,
+    get_source_file_names,
+    format_search_results_for_display,
+    TOP_K,
+)
 
 # .env 파일 로드
 load_dotenv()
@@ -36,130 +44,6 @@ if not api_key:
 
 client = Anthropic(api_key=api_key)
 model_name = "claude-sonnet-4-5"
-
-# ==============================
-# RAG 설정값
-# ==============================
-
-WIKI_DIR = "data/wiki"
-TOP_K = 3
-
-
-# ==============================
-# RAG 함수들
-# ==============================
-
-def load_wiki_documents():
-    """
-    data/wiki 폴더의 .md 파일을 모두 읽어
-    [{"file_name": 파일명, "content": 내용}, ...] 형태로 반환한다.
-    """
-    documents = []
-
-    if not os.path.exists(WIKI_DIR):
-        return documents
-
-    for file_name in os.listdir(WIKI_DIR):
-        if file_name.endswith(".md"):
-            file_path = os.path.join(WIKI_DIR, file_name)
-
-            with open(file_path, "r", encoding="utf-8") as file:
-                documents.append(
-                    {
-                        "file_name": file_name,
-                        "content": file.read()
-                    }
-                )
-
-    return documents
-
-
-def tokenize(text):
-    """
-    텍스트를 소문자로 바꾸고 단어 단위로 나눈다.
-    한글, 영어, 숫자 이외의 문자는 공백으로 처리한다.
-    2글자 미만 토큰은 제거한다.
-    """
-    text = text.lower()
-
-    cleaned_chars = []
-
-    for char in text:
-        if char.isalnum() or char.isspace():
-            cleaned_chars.append(char)
-        else:
-            cleaned_chars.append(" ")
-
-    cleaned_text = "".join(cleaned_chars)
-
-    tokens = cleaned_text.split()
-
-    tokens = [token for token in tokens if len(token) >= 2]
-
-    return tokens
-
-
-def score_document(question, document_content):
-    """
-    질문 토큰과 문서 토큰의 교집합 크기를 점수로 반환한다.
-    set을 사용해 중복 카운트를 방지한다.
-    """
-    question_tokens = set(tokenize(question))
-    document_tokens = set(tokenize(document_content))
-
-    if not question_tokens or not document_tokens:
-        return 0
-
-    score = len(question_tokens.intersection(document_tokens))
-
-    return score
-
-
-def search_wiki(question, top_k=TOP_K):
-    """
-    질문과 관련도가 높은 문서를 top_k개 반환한다.
-    점수가 같으면 파일명 오름차순으로 정렬해 결과가 일정하게 나온다.
-    """
-    documents = load_wiki_documents()
-
-    scored_documents = []
-
-    for document in documents:
-        score = score_document(question, document["content"])
-
-        scored_documents.append(
-            {
-                "file_name": document["file_name"],
-                "content": document["content"],
-                "score": score
-            }
-        )
-
-    scored_documents.sort(
-        key=lambda item: (-item["score"], item["file_name"])
-    )
-
-    return scored_documents[:top_k]
-
-
-def build_rag_context(search_results):
-    """
-    검색된 문서들을 하나의 문자열로 합친다.
-    각 문서 앞에 파일명 출처를 붙인다.
-    """
-    context_parts = []
-
-    for result in search_results:
-        context_parts.append(
-            f"[문서명: {result['file_name']}]\n{result['content']}"
-        )
-
-    return "\n\n---\n\n".join(context_parts)
-
-
-def get_source_file_names(search_results):
-    """검색된 문서의 파일명 목록을 반환한다."""
-    return [result["file_name"] for result in search_results]
 
 
 # ==============================
@@ -228,17 +112,10 @@ def build_messages(user_question, rag_context, source_files):
 
     messages = []
 
-    # 이전 대화 내역을 함께 전달한다.
     for message in st.session_state.docent_messages:
         messages.append(message)
 
-    # 새 사용자 질문은 RAG Context와 함께 전달한다.
-    messages.append(
-        {
-            "role": "user",
-            "content": prompt
-        }
-    )
+    messages.append({"role": "user", "content": prompt})
 
     return messages
 
@@ -296,18 +173,11 @@ for message in st.session_state.docent_messages:
 user_question = st.chat_input("앳플리 제품/앱/정책에 대해 질문해보세요")
 
 if user_question:
-    # 사용자 질문을 화면에 표시하고 저장한다.
-    st.session_state.docent_messages.append(
-        {
-            "role": "user",
-            "content": user_question
-        }
-    )
+    st.session_state.docent_messages.append({"role": "user", "content": user_question})
 
     with st.chat_message("user"):
         st.write(user_question)
 
-    # Claude 답변 생성
     with st.chat_message("assistant"):
         with st.spinner("앳플리 봇이 답변 중입니다..."):
             try:
@@ -323,18 +193,15 @@ if user_question:
 
                     # 검색된 참고 문서를 expander로 표시한다.
                     with st.expander("검색된 참고 문서"):
-                        for result in search_results:
-                            st.write(f"- {result['file_name']} / 점수: {result['score']}")
+                        for line in format_search_results_for_display(search_results):
+                            st.write(line)
 
                     # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
                     answer = ask_docent(user_question, rag_context, source_files)
                     st.write(answer)
 
                     st.session_state.docent_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": answer
-                        }
+                        {"role": "assistant", "content": answer}
                     )
 
             except Exception as error:

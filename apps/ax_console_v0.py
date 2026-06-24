@@ -1,9 +1,17 @@
 import os
-import re
 import json
 import streamlit as st
 from dotenv import load_dotenv
 from anthropic import Anthropic
+
+# utils.rag_utils에서 앳플리 봇 RAG 공통 함수를 가져온다.
+from utils.rag_utils import (
+    search_wiki,
+    build_rag_context,
+    get_source_file_names,
+    format_search_results_for_display,
+    TOP_K,
+)
 
 # .env 파일 로드
 load_dotenv()
@@ -226,127 +234,7 @@ def generate_cs_reply(customer_message):
     )
 
 
-# ==============================
-# 앳플리 봇 RAG 설정값
-# ==============================
-
-WIKI_DIR = "data/wiki"
-TOP_K = 3
-
-
-def load_wiki_documents():
-    """
-    data/wiki 폴더의 .md 파일을 모두 읽어
-    [{"file_name": 파일명, "content": 내용}, ...] 형태로 반환한다.
-    """
-    documents = []
-
-    if not os.path.exists(WIKI_DIR):
-        return documents
-
-    for file_name in os.listdir(WIKI_DIR):
-        if file_name.endswith(".md"):
-            file_path = os.path.join(WIKI_DIR, file_name)
-
-            with open(file_path, "r", encoding="utf-8") as file:
-                documents.append(
-                    {
-                        "file_name": file_name,
-                        "content": file.read()
-                    }
-                )
-
-    return documents
-
-
-def tokenize(text):
-    """
-    텍스트를 소문자로 바꾸고 단어 단위로 나눈다.
-    한글, 영어, 숫자 이외의 문자는 공백으로 처리하고 2글자 미만 토큰은 제거한다.
-    """
-    text = text.lower()
-
-    cleaned_chars = []
-
-    for char in text:
-        if char.isalnum() or char.isspace():
-            cleaned_chars.append(char)
-        else:
-            cleaned_chars.append(" ")
-
-    cleaned_text = "".join(cleaned_chars)
-
-    tokens = cleaned_text.split()
-
-    tokens = [token for token in tokens if len(token) >= 2]
-
-    return tokens
-
-
-def score_document(question, document_content):
-    """
-    질문 토큰과 문서 토큰의 교집합 크기를 점수로 반환한다.
-    set을 사용해 중복 카운트를 방지한다.
-    """
-    question_tokens = set(tokenize(question))
-    document_tokens = set(tokenize(document_content))
-
-    if not question_tokens or not document_tokens:
-        return 0
-
-    score = len(question_tokens.intersection(document_tokens))
-
-    return score
-
-
-def search_wiki(question, top_k=TOP_K):
-    """
-    질문과 관련도가 높은 문서를 top_k개 반환한다.
-    점수가 같으면 파일명 오름차순으로 정렬해 결과가 일정하게 나온다.
-    """
-    documents = load_wiki_documents()
-
-    scored_documents = []
-
-    for document in documents:
-        score = score_document(question, document["content"])
-
-        scored_documents.append(
-            {
-                "file_name": document["file_name"],
-                "content": document["content"],
-                "score": score
-            }
-        )
-
-    scored_documents.sort(
-        key=lambda item: (-item["score"], item["file_name"])
-    )
-
-    return scored_documents[:top_k]
-
-
-def build_rag_context(search_results):
-    """
-    검색된 문서들을 하나의 문자열로 합친다.
-    각 문서 앞에 파일명 출처를 붙인다.
-    """
-    context_parts = []
-
-    for result in search_results:
-        context_parts.append(
-            f"[문서명: {result['file_name']}]\n{result['content']}"
-        )
-
-    return "\n\n---\n\n".join(context_parts)
-
-
-def get_source_file_names(search_results):
-    """검색된 문서의 파일명 목록을 반환한다."""
-    return [result["file_name"] for result in search_results]
-
-
-atple_system_prompt = """
+atflee_system_prompt = """
 # Role
 너는 앳플리 위키 기반 RAG 답변 봇이다.
 
@@ -386,7 +274,7 @@ atple_system_prompt = """
 """
 
 
-def build_atple_messages(user_question, rag_context, source_files):
+def build_atflee_messages(user_question, rag_context, source_files):
     """
     앳플리 봇 탭용 messages를 구성한다.
     새 질문에는 RAG로 검색된 문서만 rag_context로 전달한다.
@@ -408,7 +296,7 @@ def build_atple_messages(user_question, rag_context, source_files):
 
     messages = []
 
-    for message in st.session_state.atple_bot_messages:
+    for message in st.session_state.atflee_bot_messages:
         messages.append(message)
 
     messages.append({"role": "user", "content": prompt})
@@ -416,7 +304,7 @@ def build_atple_messages(user_question, rag_context, source_files):
     return messages
 
 
-def ask_atple_bot(user_question, rag_context, source_files):
+def ask_atflee_bot(user_question, rag_context, source_files):
     """
     RAG로 검색된 문서를 Context로 Claude에게 전달하고 답변을 받는다.
     """
@@ -424,8 +312,8 @@ def ask_atple_bot(user_question, rag_context, source_files):
         model=model_name,
         max_tokens=1200,
         temperature=0.2,
-        system=atple_system_prompt,
-        messages=build_atple_messages(user_question, rag_context, source_files)
+        system=atflee_system_prompt,
+        messages=build_atflee_messages(user_question, rag_context, source_files)
     )
 
     return response.content[0].text
@@ -479,7 +367,7 @@ def call_ax_tutor(messages):
 st.title("앳플리 AX Console v0")
 st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
 
-tab_chat, tab_voc, tab_cs, tab_atple = st.tabs(["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇"])
+tab_chat, tab_voc, tab_cs, tab_atflee = st.tabs(["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇"])
 
 
 # =========================
@@ -639,61 +527,61 @@ AS 문의도 남겼는데 답변이 늦어서 너무 답답합니다."""
 # =========================
 # 4. 앳플리 봇 탭
 # =========================
-with tab_atple:
+with tab_atflee:
     st.subheader("앳플리 봇")
     st.write("질문과 관련 있는 data/wiki 문서를 검색해 답변합니다.")
     st.info("현재 앳플리 봇은 data/wiki 문서와 공식몰 공개 정보를 바탕으로 답변합니다.")
 
-    if "atple_bot_messages" not in st.session_state:
-        st.session_state.atple_bot_messages = []
+    if "atflee_bot_messages" not in st.session_state:
+        st.session_state.atflee_bot_messages = []
 
-    if st.button("앳플리 봇 대화 초기화", key="atple_reset"):
-        st.session_state.atple_bot_messages = []
+    if st.button("앳플리 봇 대화 초기화", key="atflee_reset"):
+        st.session_state.atflee_bot_messages = []
         st.rerun()
 
-    for message in st.session_state.atple_bot_messages:
+    for message in st.session_state.atflee_bot_messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    atple_user_input = st.chat_input("앳플리 제품/앱/정책에 대해 질문해보세요", key="atple_chat_input")
+    atflee_user_input = st.chat_input("앳플리 제품/앱/정책에 대해 질문해보세요", key="atflee_chat_input")
 
-    if atple_user_input:
-        st.session_state.atple_bot_messages.append(
+    if atflee_user_input:
+        st.session_state.atflee_bot_messages.append(
             {
                 "role": "user",
-                "content": atple_user_input
+                "content": atflee_user_input
             }
         )
 
         with st.chat_message("user"):
-            st.write(atple_user_input)
+            st.write(atflee_user_input)
 
         with st.chat_message("assistant"):
             with st.spinner("앳플리 봇이 답변 중입니다..."):
                 try:
                     # 1단계: 질문과 관련 있는 문서를 검색한다.
-                    atple_search_results = search_wiki(atple_user_input, top_k=TOP_K)
+                    atflee_search_results = search_wiki(atflee_user_input, top_k=TOP_K)
 
-                    if not atple_search_results:
+                    if not atflee_search_results:
                         st.warning("data/wiki 폴더에 문서가 없어 답변을 생성할 수 없습니다.")
                     else:
                         # 2단계: 검색된 문서만 RAG Context로 합친다.
-                        atple_rag_context = build_rag_context(atple_search_results)
-                        atple_source_files = get_source_file_names(atple_search_results)
+                        atflee_rag_context = build_rag_context(atflee_search_results)
+                        atflee_source_files = get_source_file_names(atflee_search_results)
 
                         # 검색된 참고 문서를 expander로 표시한다.
                         with st.expander("검색된 참고 문서"):
-                            for result in atple_search_results:
+                            for result in atflee_search_results:
                                 st.write(f"- {result['file_name']} / 점수: {result['score']}")
 
                         # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
-                        atple_reply = ask_atple_bot(atple_user_input, atple_rag_context, atple_source_files)
-                        st.write(atple_reply)
+                        atflee_reply = ask_atflee_bot(atflee_user_input, atflee_rag_context, atflee_source_files)
+                        st.write(atflee_reply)
 
-                        st.session_state.atple_bot_messages.append(
+                        st.session_state.atflee_bot_messages.append(
                             {
                                 "role": "assistant",
-                                "content": atple_reply
+                                "content": atflee_reply
                             }
                         )
 
