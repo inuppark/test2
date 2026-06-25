@@ -14,12 +14,23 @@ import os
 import json
 from datetime import datetime
 
-from utils.rag_utils import (
-    search_wiki,
-    build_rag_context,
-    get_source_file_names,
-    evaluate_rag_answer,
-)
+try:
+    # 패키지 모드(utils.tool_agent_utils)로 임포트될 때 사용하는 상대 임포트.
+    # sys.path 설정 없이도 동일 패키지 내 모듈을 안정적으로 찾는다.
+    from .rag_utils import (
+        search_wiki,
+        build_rag_context,
+        get_source_file_names,
+        evaluate_rag_answer,
+    )
+except ImportError:
+    # 스크립트로 직접 실행되거나 경로 설정이 다를 때 절대 임포트로 폴백한다.
+    from utils.rag_utils import (
+        search_wiki,
+        build_rag_context,
+        get_source_file_names,
+        evaluate_rag_answer,
+    )
 
 
 # ==============================
