@@ -55,6 +55,30 @@ model_name = "claude-sonnet-4-5"
 
 
 # ==============================
+# Prompt Caching 헬퍼
+# ==============================
+
+def get_usage_dict(usage):
+    """response.usage 에서 캐싱 관련 필드를 안전하게 꺼낸다."""
+    return {
+        "input_tokens":                getattr(usage, "input_tokens",                None),
+        "output_tokens":               getattr(usage, "output_tokens",               None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+        "cache_read_input_tokens":     getattr(usage, "cache_read_input_tokens",     None),
+    }
+
+
+def render_usage_expander(usage_dict):
+    """캐싱 사용량을 expander로 표시한다."""
+    with st.expander("프롬프트 캐싱 사용량"):
+        for key, value in usage_dict.items():
+            if value is None:
+                st.write(f"- {key}: 지원되지 않거나 없음")
+            else:
+                st.write(f"- {key}: {value}")
+
+
+# ==============================
 # System Prompt (RAG 버전)
 # ==============================
 
@@ -103,36 +127,41 @@ system_prompt = """
 def build_messages(user_question, rag_context, source_files):
     """
     Claude에게 보낼 messages를 구성한다.
-    새 질문에는 RAG로 검색된 문서만 rag_context로 전달한다.
+    rag_context를 cache_control이 붙은 별도 text block으로 분리해
+    반복 사용 시 Prompt Caching 효과를 얻는다.
     이전 대화 내역도 함께 전달해 맥락을 유지한다.
     """
-    prompt = f"""
-<rag_context>
-{rag_context}
-</rag_context>
-
-<source_files>
-{", ".join(source_files)}
-</source_files>
-
-<user_question>
-{user_question}
-</user_question>
-"""
-
     messages = []
 
+    # 이전 대화 내역은 string content 그대로 전달한다.
     for message in st.session_state.docent_messages:
         messages.append(message)
 
-    messages.append({"role": "user", "content": prompt})
+    # 현재 메시지: rag_context는 캐싱 대상 블록, 질문은 일반 블록으로 분리한다.
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": f"<rag_context>\n{rag_context}\n</rag_context>",
+                "cache_control": {"type": "ephemeral"}
+            },
+            {
+                "type": "text",
+                "text": (
+                    f"<source_files>\n{', '.join(source_files)}\n</source_files>\n\n"
+                    f"<user_question>\n{user_question}\n</user_question>"
+                )
+            }
+        ]
+    })
 
     return messages
 
 
 def ask_docent(user_question, rag_context, source_files):
     """
-    RAG로 검색된 문서를 Context로 Claude에게 전달하고 답변을 받는다.
+    RAG로 검색된 문서를 Context로 Claude에게 전달하고 (답변 텍스트, usage dict)를 반환한다.
     """
     response = client.messages.create(
         model=model_name,
@@ -142,7 +171,7 @@ def ask_docent(user_question, rag_context, source_files):
         messages=build_messages(user_question, rag_context, source_files)
     )
 
-    return response.content[0].text
+    return response.content[0].text, get_usage_dict(response.usage)
 
 
 # =========================
@@ -208,7 +237,7 @@ if user_question:
                             st.caption(result.get("snippet", ""))
 
                     # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
-                    answer = ask_docent(user_question, rag_context, source_files)
+                    answer, usage_dict = ask_docent(user_question, rag_context, source_files)
                     st.write(answer)
 
                     # 4단계: 답변 품질을 체크한다.
@@ -220,6 +249,12 @@ if user_question:
                                 st.success(f"✔ {check['name']}: {check['message']}")
                             else:
                                 st.warning(f"△ {check['name']}: {check['message']}")
+
+                    # 5단계: 프롬프트 캐싱 사용량을 표시한다.
+                    render_usage_expander(usage_dict)
+                    st.caption(
+                        "반복되는 문서 Context는 Prompt Caching을 통해 비용 효율을 높일 수 있습니다."
+                    )
 
                     st.session_state.docent_messages.append(
                         {"role": "assistant", "content": answer}
