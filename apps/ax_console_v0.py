@@ -893,6 +893,27 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
                 with st.expander("Claude 최종 원문"):
                     st.code(raw_text, language="json")
 
+            # 11. 프롬프트 캐싱 사용량 expander
+            usage_logs = agent_output.get("usage_logs", [])
+            with st.expander("프롬프트 캐싱 사용량"):
+                if not usage_logs:
+                    st.write("아직 usage 정보가 없습니다.")
+                else:
+                    any_cache_read = False
+                    for log in usage_logs:
+                        cache_read = log.get("cache_read_input_tokens") or 0
+                        if cache_read > 0:
+                            any_cache_read = True
+                        st.write(f"**라운드 {log.get('round', '?')}**")
+                        st.json({
+                            "input_tokens":                log.get("input_tokens"),
+                            "output_tokens":               log.get("output_tokens"),
+                            "cache_creation_input_tokens": log.get("cache_creation_input_tokens"),
+                            "cache_read_input_tokens":     log.get("cache_read_input_tokens"),
+                        })
+                    if any_cache_read:
+                        st.success("캐시 읽기 사용 확인")
+
     # 보안 안내
     st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
 

@@ -130,6 +130,8 @@ _SYSTEM_PROMPT = """
 - 가격, 재고, 품절, 이벤트, 프로모션은 단정하지 않는다.
 - 개인정보, 주문번호, 연락처, 주소 등 민감정보는 공개 채팅에 입력하지 않도록 안내한다.
 - 위험하거나 확정이 필요한 내용은 needs_human_review를 true로 둔다.
+- <cached_rag_context>가 제공되면 해당 내용을 앳플리 위키 근거로 활용한다.
+- 도구 결과와 cached_rag_context를 함께 참고하되, 없는 내용은 추측하지 않는다.
 
 # Final Output Rules
 최종 답변은 반드시 JSON만 출력한다.
@@ -276,6 +278,19 @@ def extract_text_from_response(response):
     return "\n".join(text_parts).strip()
 
 
+def get_usage_dict(usage):
+    """
+    response.usage 객체에서 캐싱 관련 필드를 안전하게 dict로 변환한다.
+    필드가 없어도 None을 반환하므로 오류가 발생하지 않는다.
+    """
+    return {
+        "input_tokens":                getattr(usage, "input_tokens",                None),
+        "output_tokens":               getattr(usage, "output_tokens",               None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+        "cache_read_input_tokens":     getattr(usage, "cache_read_input_tokens",     None),
+    }
+
+
 # ==============================
 # Agent Loop 함수
 # ==============================
@@ -287,18 +302,25 @@ def run_structured_agent(client, model_name, user_question, max_tool_rounds=5):
     client와 model_name은 호출하는 쪽에서 전달받는다.
     이 모듈 안에서 직접 Anthropic 클라이언트를 생성하지 않는다.
 
+    Prompt Caching 적용:
+    - search_atflee_wiki 결과의 긴 rag_context를 tool_result 본문에서 분리한다.
+    - tool_result content에는 source_files / search_results 요약만 포함한다.
+    - rag_context는 같은 user content 배열의 text block으로 cache_control을 적용해 전달한다.
+
     반환값:
     {
         "result":     파싱된 JSON dict (파싱 실패 시 None),
         "raw_text":   Claude 최종 원문 텍스트,
         "used_tools": 사용한 도구 이름 목록,
-        "tool_logs":  라운드별 도구 실행 로그,
+        "tool_logs":  라운드별 도구 실행 로그 (rag_context는 길이만 표시),
+        "usage_logs": 라운드별 API usage 정보 (cache_creation/cache_read 포함),
         "error":      오류 메시지 (정상 처리 시 None)
     }
     """
     messages   = [{"role": "user", "content": user_question}]
     used_tools = []
     tool_logs  = []
+    usage_logs = []
 
     for round_index in range(max_tool_rounds):
         try:
@@ -316,8 +338,14 @@ def run_structured_agent(client, model_name, user_question, max_tool_rounds=5):
                 "raw_text":   "",
                 "used_tools": used_tools,
                 "tool_logs":  tool_logs,
+                "usage_logs": usage_logs,
                 "error":      f"Claude API 호출 오류: {error}"
             }
+
+        # 이번 라운드의 usage를 수집한다.
+        round_usage = get_usage_dict(response.usage)
+        round_usage["round"] = round_index + 1
+        usage_logs.append(round_usage)
 
         messages.append({"role": "assistant", "content": response.content})
 
@@ -339,6 +367,7 @@ def run_structured_agent(client, model_name, user_question, max_tool_rounds=5):
                     "raw_text":   final_text,
                     "used_tools": used_tools,
                     "tool_logs":  tool_logs,
+                    "usage_logs": usage_logs,
                     "error":      None
                 }
             except json.JSONDecodeError as error:
@@ -347,6 +376,7 @@ def run_structured_agent(client, model_name, user_question, max_tool_rounds=5):
                     "raw_text":   final_text,
                     "used_tools": used_tools,
                     "tool_logs":  tool_logs,
+                    "usage_logs": usage_logs,
                     "error":      f"JSON 파싱 실패: {error}"
                 }
 
@@ -362,19 +392,63 @@ def run_structured_agent(client, model_name, user_question, max_tool_rounds=5):
 
             tool_result = run_tool(tool_name, tool_input)
 
-            # 라운드별 로그를 기록한다.
+            # ── 로그용 tool_result: rag_context는 길이만 표시 ──────────
+            tool_result_for_log = dict(tool_result)
+            if "rag_context" in tool_result_for_log:
+                rag_len = len(str(tool_result_for_log["rag_context"]))
+                tool_result_for_log["rag_context"] = f"[생략됨: {rag_len} characters]"
+
             tool_logs.append({
                 "round":       round_index + 1,
                 "tool_name":   tool_name,
                 "tool_input":  tool_input,
-                "tool_result": tool_result
+                "tool_result": tool_result_for_log
             })
 
-            tool_results_content.append({
-                "type":        "tool_result",
-                "tool_use_id": tool_use_id,
-                "content":     json.dumps(tool_result, ensure_ascii=False, indent=2)
-            })
+            # ── Claude에게 전달할 tool_result ────────────────────────
+            if tool_name == "search_atflee_wiki":
+                # Anthropic API 제약: tool_use 직후 user 메시지의 top-level content에는
+                # tool_result 외 다른 블록을 혼합할 수 없다.
+                # 대신 tool_result의 content를 구조화된 블록 리스트로 만들고
+                # 그 안에 cache_control을 적용한다.
+                rag_context = tool_result.get("rag_context", "")
+
+                tool_result_summary = json.dumps(
+                    {
+                        "source_files":   tool_result.get("source_files", []),
+                        "search_results": tool_result.get("search_results", []),
+                    },
+                    ensure_ascii=False,
+                    indent=2
+                )
+
+                # tool_result content를 블록 리스트로 구성한다.
+                tool_result_content_blocks = [
+                    {
+                        "type": "text",
+                        "text": tool_result_summary
+                    }
+                ]
+                if rag_context:
+                    # rag_context 블록에 cache_control을 적용한다.
+                    tool_result_content_blocks.append({
+                        "type": "text",
+                        "text": f"<cached_rag_context>\n{rag_context}\n</cached_rag_context>",
+                        "cache_control": {"type": "ephemeral"}
+                    })
+
+                tool_results_content.append({
+                    "type":        "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content":     tool_result_content_blocks
+                })
+            else:
+                # search 외 도구는 기존처럼 JSON 문자열 전달한다.
+                tool_results_content.append({
+                    "type":        "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content":     json.dumps(tool_result, ensure_ascii=False, indent=2)
+                })
 
         messages.append({"role": "user", "content": tool_results_content})
 
@@ -383,6 +457,7 @@ def run_structured_agent(client, model_name, user_question, max_tool_rounds=5):
         "raw_text":   "",
         "used_tools": used_tools,
         "tool_logs":  tool_logs,
+        "usage_logs": usage_logs,
         "error":      f"최대 도구 사용 라운드 {max_tool_rounds}회에 도달했습니다."
     }
 
