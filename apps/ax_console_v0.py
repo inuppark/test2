@@ -29,6 +29,15 @@ from utils.tool_agent_utils import (
     load_saved_result,
 )
 
+# utils.vector_rag_utils에서 TF-IDF 벡터 검색 공통 함수를 가져온다. (Chapter 10-5)
+from utils.vector_rag_utils import (
+    search_similar_chunks,
+    build_vector_rag_context,
+    get_source_chunks,
+    summarize_query_vector,
+    format_vector_results_for_display,
+)
+
 # .env 파일 로드
 load_dotenv()
 
@@ -384,6 +393,62 @@ def call_ax_tutor(messages):
 
 
 # =========================
+# 벡터 RAG Claude 답변 함수 (Chapter 10-6)
+# =========================
+
+def ask_claude_with_vector_rag(question, vector_results):
+    """
+    TF-IDF 벡터 검색 결과를 Context로 Claude에게 답변을 요청한다.
+    build_vector_rag_context는 utils.vector_rag_utils에서 가져온다.
+    """
+    vector_rag_context = build_vector_rag_context(vector_results)
+
+    system_prompt = """
+# Role
+너는 앳플리 벡터 RAG 답변 봇이다.
+
+# Goal
+사용자 질문에 대해 TF-IDF 벡터 검색으로 찾은 앳플리 위키 청크를 근거로 쉽고 안전하게 답변한다.
+
+# Rules
+* <vector_rag_context>에 있는 정보만 확정적으로 말한다.
+* Context에 없는 내용은 추측하지 않는다.
+* 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
+* 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
+* 개인정보, 주문번호, 연락처, 주소 등 민감정보는 공개 채팅에 입력하지 않도록 안내한다.
+* 답변 마지막에는 참고한 source_file과 chunk_id를 표시한다.
+* 검색 결과의 유사도가 낮으면 "정확한 확인이 필요합니다"라고 안내한다.
+
+# Output Format
+아래 형식으로 답변한다.
+
+1. 간단한 답변
+2. 근거가 되는 앳플리 위키 청크
+3. 바로 해볼 수 있는 것
+4. 확인이 필요한 것
+5. 참고 청크
+"""
+
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=1000,
+        temperature=0.2,
+        system=system_prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"<vector_rag_context>\n{vector_rag_context}\n</vector_rag_context>\n\n"
+                    f"<user_question>\n{question}\n</user_question>"
+                ),
+            }
+        ],
+    )
+
+    return response.content[0].text
+
+
+# =========================
 # Prompt Caching 헬퍼
 # =========================
 
@@ -555,8 +620,8 @@ def render_saved_result_detail(saved_data, file_name="result.json", download_key
 st.title("앳플리 AX Console v0")
 st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
 
-tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent = st.tabs(
-    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent"]
+tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent, tab_vector_rag = st.tabs(
+    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent", "벡터 RAG"]
 )
 
 
@@ -966,3 +1031,136 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
                 file_name=selected_item["file_name"],
                 download_key_prefix="history"
             )
+
+
+# =========================
+# 6. 벡터 RAG 탭 (Chapter 10-6)
+# =========================
+with tab_vector_rag:
+    st.subheader("앳플리 벡터 RAG")
+    st.write(
+        "TF-IDF 벡터 검색으로 data/wiki 청크를 찾고, "
+        "선택된 청크를 근거로 Claude가 답변합니다."
+    )
+    st.caption(
+        "현재 버전은 학습용 TF-IDF 벡터 검색입니다. "
+        "실제 의미 기반 검색은 추후 임베딩 API로 고도화할 수 있습니다."
+    )
+
+    # 벡터 인덱스 존재 여부 확인
+    _VECTOR_INDEX_PATH = os.path.join(_PROJECT_ROOT, "data", "rag", "atflee_tfidf_vector_index.json")
+
+    if not os.path.exists(_VECTOR_INDEX_PATH):
+        st.error(
+            "벡터 인덱스가 없습니다. 먼저 Chapter 10-1, 10-2를 실행해 인덱스를 생성하세요."
+        )
+        st.code(
+            "python chapters/chapter10/01_atflee_chunk_wiki_documents.py\n"
+            "python chapters/chapter10/02_atflee_build_tfidf_vector_index.py",
+            language="bash"
+        )
+    else:
+        # 인덱스를 세션 캐시에 올려두어 매 질문마다 파일을 다시 읽지 않는다.
+        if "vector_index_payload" not in st.session_state:
+            import json as _json
+            with open(_VECTOR_INDEX_PATH, "r", encoding="utf-8") as _f:
+                st.session_state.vector_index_payload = _json.load(_f)
+
+        _index = st.session_state.vector_index_payload
+        st.caption(
+            f"인덱스 로드 완료 — 청크 수: {_index.get('chunk_count')} / "
+            f"Vocabulary: {_index.get('vocabulary_size')} / "
+            f"생성: {_index.get('created_at')}"
+        )
+
+        # 질문 입력
+        vector_rag_question = st.text_input(
+            "질문을 입력하세요",
+            value="체중계가 앱이랑 연결이 안 돼요. 뭘 확인해야 해요?",
+            key="vector_rag_question"
+        )
+
+        if st.button("벡터 RAG 답변 생성", type="primary", key="vector_rag_run"):
+            if not vector_rag_question.strip():
+                st.warning("질문을 입력해주세요.")
+            else:
+                with st.spinner("벡터 검색 및 Claude 답변 생성 중..."):
+                    try:
+                        # 1단계: TF-IDF 벡터 검색
+                        search_output = search_similar_chunks(
+                            vector_rag_question,
+                            index_payload=_index,
+                            top_k=3,
+                        )
+
+                        _error        = search_output.get("error")
+                        _vr_results   = search_output.get("results", [])
+                        _query_vector = search_output.get("query_vector", {})
+
+                        if _error:
+                            st.error(f"벡터 검색 오류: {_error}")
+                        else:
+                            # 2단계: 질문 벡터 토큰 표시
+                            _top_tokens = summarize_query_vector(_query_vector, top_n=10)
+                            with st.expander("질문 벡터 토큰 (상위 10개)"):
+                                if _top_tokens:
+                                    for _tok, _w in _top_tokens:
+                                        st.write(f"- {_tok}: {_w:.4f}")
+                                else:
+                                    st.warning(
+                                        "질문 벡터가 비어 있습니다. "
+                                        "인덱스 vocabulary에 없는 단어만 포함된 질문일 수 있습니다."
+                                    )
+
+                            # 3단계: 벡터 검색 결과 TOP 3 표시
+                            _max_sim = max((r["similarity"] for r in _vr_results), default=0)
+                            if _max_sim < 0.05:
+                                st.warning(
+                                    "검색 유사도가 낮습니다. 답변 품질이 낮을 수 있습니다."
+                                )
+
+                            with st.expander("벡터 검색 TOP 3"):
+                                for _rank, _res in enumerate(_vr_results, start=1):
+                                    st.markdown(
+                                        f"**{_rank}위** `{_res['source_file']}` / "
+                                        f"`{_res['chunk_id']}` / 유사도: `{_res['similarity']:.4f}`"
+                                    )
+                                    st.caption(_res["text"][:300])
+                                    st.divider()
+
+                            # 4단계: 키워드 검색 vs 벡터 검색 비교
+                            with st.expander("키워드 검색 vs 벡터 검색 비교"):
+                                _kw_col, _vr_col = st.columns(2)
+
+                                with _kw_col:
+                                    st.markdown("**키워드 검색 TOP 3**")
+                                    try:
+                                        _kw_results = search_wiki(vector_rag_question, top_k=3)
+                                        if _kw_results:
+                                            for _kr in _kw_results:
+                                                st.write(
+                                                    f"- {_kr.get('file_name', '-')} "
+                                                    f"(score: {_kr.get('score', 0)})"
+                                                )
+                                        else:
+                                            st.write("결과 없음")
+                                    except Exception as _kw_err:
+                                        st.write(f"키워드 검색 오류: {_kw_err}")
+
+                                with _vr_col:
+                                    st.markdown("**벡터 검색 TOP 3**")
+                                    for _vline in format_vector_results_for_display(_vr_results):
+                                        st.write(_vline)
+
+                            # 5단계: Claude 답변 생성
+                            st.markdown("### Claude 벡터 RAG 답변")
+                            _vr_answer = ask_claude_with_vector_rag(
+                                vector_rag_question, _vr_results
+                            )
+                            st.write(_vr_answer)
+
+                    except Exception as _vr_err:
+                        st.error(f"벡터 RAG 처리 중 오류가 발생했습니다: {_vr_err}")
+
+        # 보안 안내
+        st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
