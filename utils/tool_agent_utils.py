@@ -430,63 +430,64 @@ def save_structured_result(project_root, result, user_question):
 
 def list_saved_results(project_root):
     """
-    reports/chapter08 폴더에 저장된 .json 파일 목록을 읽어 반환한다.
-
-    반환값: 파일명 내림차순(최신 우선) 정렬된 목록
-    [
-        {
-            "file_name":  "atflee_tool_result_20260625_131613.json",
-            "file_path":  "...(전체 경로)...",
-            "created_at": "2026-06-25 13:16:13",
-            "summary":    "...",
-            "issue_type": "복합",
-            "severity":   "높음",
-            "owner_team": "앱/CS팀"
-        },
-        ...
-    ]
-    폴더가 없거나 파일이 없으면 빈 리스트를 반환한다.
+    reports/chapter08 폴더에 저장된 Tool Use Agent JSON 결과 목록을 불러온다.
+    AX Console의 처리 이력 보기에서 사용한다.
     """
     reports_dir = os.path.join(project_root, "reports", "chapter08")
 
     if not os.path.exists(reports_dir):
         return []
 
-    items = []
+    saved_results = []
 
-    for file_name in sorted(os.listdir(reports_dir), reverse=True):
+    for file_name in os.listdir(reports_dir):
         if not file_name.endswith(".json"):
             continue
 
         file_path = os.path.join(reports_dir, file_name)
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(file_path, "r", encoding="utf-8") as file:
+                data = json.load(file)
 
-            result = data.get("result", {}) or {}
+            result = data.get("result", {})
 
-            # created_at: 파일 내부 값 우선, 없으면 파일 수정 시간으로 대체한다.
             created_at = data.get("created_at")
             if not created_at:
-                mtime = os.path.getmtime(file_path)
-                created_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                modified_time = os.path.getmtime(file_path)
+                created_at = datetime.fromtimestamp(modified_time).strftime("%Y-%m-%d %H:%M:%S")
 
-            items.append({
-                "file_name":  file_name,
-                "file_path":  file_path,
-                "created_at": created_at,
-                "summary":    result.get("summary", ""),
-                "issue_type": result.get("issue_type", ""),
-                "severity":   result.get("severity", ""),
-                "owner_team": result.get("owner_team", ""),
-            })
+            saved_results.append(
+                {
+                    "file_name": file_name,
+                    "file_path": file_path,
+                    "created_at": created_at,
+                    "summary": result.get("summary", ""),
+                    "issue_type": result.get("issue_type", ""),
+                    "severity": result.get("severity", ""),
+                    "owner_team": result.get("owner_team", ""),
+                }
+            )
 
-        except Exception:
-            # 읽기/파싱 실패 파일은 건너뛴다.
-            continue
+        except Exception as error:
+            saved_results.append(
+                {
+                    "file_name": file_name,
+                    "file_path": file_path,
+                    "created_at": "",
+                    "summary": f"파일 읽기 오류: {error}",
+                    "issue_type": "",
+                    "severity": "",
+                    "owner_team": "",
+                }
+            )
 
-    return items
+    saved_results.sort(
+        key=lambda item: item.get("created_at", ""),
+        reverse=True
+    )
+
+    return saved_results
 
 
 # ==============================
@@ -495,15 +496,13 @@ def list_saved_results(project_root):
 
 def load_saved_result(file_path):
     """
-    선택한 JSON 파일을 읽어 dict로 반환한다.
-
-    파일이 없거나 JSON 파싱에 실패하면 None을 반환한다.
+    저장된 Tool Use Agent JSON 결과 파일 하나를 읽어서 dict로 반환한다.
     """
     if not file_path or not os.path.exists(file_path):
         return None
 
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(file_path, "r", encoding="utf-8") as file:
+            return json.load(file)
     except Exception:
         return None
