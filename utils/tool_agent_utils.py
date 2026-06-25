@@ -411,3 +411,88 @@ def save_structured_result(project_root, result, user_question):
         json.dump(result_with_metadata, f, ensure_ascii=False, indent=2)
 
     return file_path
+
+
+# ==============================
+# 이력 목록 조회 함수
+# ==============================
+
+def list_saved_results(project_root):
+    """
+    reports/chapter08 폴더에 저장된 .json 파일 목록을 읽어 반환한다.
+
+    반환값: 파일명 내림차순(최신 우선) 정렬된 목록
+    [
+        {
+            "file_name":  "atflee_tool_result_20260625_131613.json",
+            "file_path":  "...(전체 경로)...",
+            "created_at": "2026-06-25 13:16:13",
+            "summary":    "...",
+            "issue_type": "복합",
+            "severity":   "높음",
+            "owner_team": "앱/CS팀"
+        },
+        ...
+    ]
+    폴더가 없거나 파일이 없으면 빈 리스트를 반환한다.
+    """
+    reports_dir = os.path.join(project_root, "reports", "chapter08")
+
+    if not os.path.exists(reports_dir):
+        return []
+
+    items = []
+
+    for file_name in sorted(os.listdir(reports_dir), reverse=True):
+        if not file_name.endswith(".json"):
+            continue
+
+        file_path = os.path.join(reports_dir, file_name)
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            result = data.get("result", {}) or {}
+
+            # created_at: 파일 내부 값 우선, 없으면 파일 수정 시간으로 대체한다.
+            created_at = data.get("created_at")
+            if not created_at:
+                mtime = os.path.getmtime(file_path)
+                created_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+            items.append({
+                "file_name":  file_name,
+                "file_path":  file_path,
+                "created_at": created_at,
+                "summary":    result.get("summary", ""),
+                "issue_type": result.get("issue_type", ""),
+                "severity":   result.get("severity", ""),
+                "owner_team": result.get("owner_team", ""),
+            })
+
+        except Exception:
+            # 읽기/파싱 실패 파일은 건너뛴다.
+            continue
+
+    return items
+
+
+# ==============================
+# 이력 파일 로드 함수
+# ==============================
+
+def load_saved_result(file_path):
+    """
+    선택한 JSON 파일을 읽어 dict로 반환한다.
+
+    파일이 없거나 JSON 파싱에 실패하면 None을 반환한다.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return None
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None

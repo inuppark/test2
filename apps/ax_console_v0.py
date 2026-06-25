@@ -25,6 +25,8 @@ from utils.rag_utils import (
 from utils.tool_agent_utils import (
     run_structured_agent,
     save_structured_result,
+    list_saved_results,
+    load_saved_result,
 )
 
 # .env 파일 로드
@@ -769,3 +771,112 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
 
     # 보안 안내
     st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
+
+    # =========================
+    # 저장된 처리 이력 섹션
+    # =========================
+    st.markdown("---")
+    st.subheader("저장된 처리 이력")
+    st.write("reports/chapter08에 저장된 Tool Use Agent JSON 결과를 다시 확인할 수 있습니다.")
+    st.info(
+        "Streamlit Cloud에서는 reports 폴더 저장 결과가 영구 보관되지 않을 수 있습니다. "
+        "중요한 결과는 JSON 다운로드 버튼으로 따로 저장하세요."
+    )
+
+    saved_results = list_saved_results(_PROJECT_ROOT)
+
+    if not saved_results:
+        st.info("아직 저장된 Tool Use Agent 결과가 없습니다.")
+    else:
+        # selectbox 표시 레이블: "날짜시간 | 이슈유형 | 심각도 | 담당팀 | 파일명"
+        def _make_label(item):
+            parts = [
+                item.get("created_at", ""),
+                item.get("issue_type", "-"),
+                item.get("severity", "-"),
+                item.get("owner_team", "-"),
+                item.get("file_name", ""),
+            ]
+            return " | ".join(parts)
+
+        options      = saved_results
+        option_labels = [_make_label(item) for item in options]
+
+        selected_label = st.selectbox(
+            "결과 파일 선택",
+            option_labels,
+            key="history_selectbox"
+        )
+
+        # 선택된 항목의 인덱스를 찾는다.
+        selected_index = option_labels.index(selected_label)
+        selected_item  = options[selected_index]
+
+        saved_data = load_saved_result(selected_item["file_path"])
+
+        if saved_data is None:
+            st.error("파일을 읽는 데 실패했습니다.")
+        else:
+            st.subheader("저장 결과 상세")
+
+            result_data = saved_data.get("result") or {}
+
+            # 핵심 메트릭
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("이슈 유형", result_data.get("issue_type", "-"))
+            with col2:
+                st.metric("심각도", result_data.get("severity", "-"))
+            with col3:
+                st.metric("담당팀", result_data.get("owner_team", "-"))
+
+            st.write(f"**저장 일시:** {saved_data.get('created_at', '-')}")
+            st.write(f"**에이전트:** {saved_data.get('agent_name', '-')}")
+
+            if result_data.get("needs_human_review"):
+                st.warning("담당자 확인 필요 (needs_human_review: true)")
+
+            st.markdown("**요약**")
+            st.write(result_data.get("summary", "-"))
+
+            st.markdown("**사용 도구**")
+            st.write(", ".join(result_data.get("used_tools", [])) or "-")
+
+            st.markdown("**참고 문서**")
+            hist_sources = result_data.get("source_files", [])
+            if hist_sources:
+                for sf in hist_sources:
+                    st.write(f"- {sf}")
+            else:
+                st.write("-")
+
+            st.markdown("**고객 답변 방향**")
+            st.write(result_data.get("customer_reply_direction", "-"))
+
+            st.markdown("**내부 다음 액션**")
+            st.write(result_data.get("internal_next_action", "-"))
+
+            st.markdown("**안전 메모**")
+            hist_notes = result_data.get("safety_notes", [])
+            if hist_notes:
+                for note in hist_notes:
+                    st.write(f"- {note}")
+            else:
+                st.write("-")
+
+            # 원본 고객 문의 expander
+            with st.expander("원본 고객 문의"):
+                st.write(saved_data.get("user_question", "-"))
+
+            # 전체 JSON expander
+            with st.expander("전체 JSON"):
+                st.json(saved_data)
+
+            # 저장 결과 다운로드 버튼
+            st.download_button(
+                label="이 결과 JSON 다운로드",
+                data=json.dumps(saved_data, ensure_ascii=False, indent=2),
+                file_name=selected_item["file_name"],
+                mime="application/json",
+                key="history_download"
+            )
