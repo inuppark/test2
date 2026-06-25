@@ -27,6 +27,9 @@ logs/
 # 자동 생성 보고서
 reports/
 
+# RAG 생성 산출물 (청크, 벡터 인덱스 등)
+data/rag/
+
 # 캐시
 .cache/
 
