@@ -379,6 +379,147 @@ def call_ax_tutor(messages):
 
 
 # =========================
+# Tool Use Agent 결과 렌더링 헬퍼
+# =========================
+
+def render_tool_agent_result(result):
+    """핵심 요약 카드 → 요약 → 고객 답변 방향 → 내부 다음 액션 → 안전 메모 → 도구/문서."""
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("이슈 유형", result.get("issue_type", "-"))
+    col2.metric("심각도", result.get("severity", "-"))
+    col3.metric("담당팀", result.get("owner_team", "-"))
+    col4.metric("사람 검토", "필요" if result.get("needs_human_review") else "불필요")
+
+    if result.get("severity") == "높음":
+        st.warning("심각도 높음 — 우선 처리가 필요합니다.")
+    if result.get("needs_human_review"):
+        st.warning("담당자 확인 필요")
+
+    summary = result.get("summary", "")
+    if summary:
+        st.info(summary)
+
+    st.subheader("고객 답변 방향")
+    st.write(result.get("customer_reply_direction", "-"))
+
+    st.subheader("내부 다음 액션")
+    st.write(result.get("internal_next_action", "-"))
+
+    safety_notes = result.get("safety_notes", [])
+    if safety_notes:
+        st.subheader("안전 메모")
+        for note in safety_notes:
+            st.warning(note)
+
+    with st.expander("사용 도구 및 참고 문서"):
+        st.markdown("**사용 도구**")
+        used_tools = result.get("used_tools", [])
+        if used_tools:
+            for tool in used_tools:
+                st.write(f"- {tool}")
+        else:
+            st.write("-")
+        st.markdown("**참고 문서**")
+        source_files = result.get("source_files", [])
+        if source_files:
+            for f in source_files:
+                st.write(f"- {f}")
+        else:
+            st.write("-")
+
+
+def render_tool_logs(tool_logs):
+    """도구 실행 로그를 expander 안에 라운드별로 렌더링한다."""
+    if not tool_logs:
+        return
+    with st.expander("도구 실행 로그"):
+        for log in tool_logs:
+            st.markdown(f"**라운드 {log['round']} — {log['tool_name']}**")
+            st.markdown("입력")
+            st.json(log.get("tool_input", {}))
+            st.markdown("결과")
+            tool_result = log.get("tool_result", {})
+            if isinstance(tool_result, dict):
+                display = {}
+                for k, v in tool_result.items():
+                    if k == "rag_context" and isinstance(v, str) and len(v) > 500:
+                        display[k] = v[:500] + " ...(이하 생략)"
+                    else:
+                        display[k] = v
+                st.json(display)
+            else:
+                st.code(str(tool_result)[:1200])
+            st.divider()
+
+
+def render_saved_result_detail(saved_data, file_name="result.json", download_key_prefix="history"):
+    """저장 결과 파일을 실행 결과와 같은 구조로 렌더링한다."""
+    result_data = saved_data.get("result") or {}
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("이슈 유형", result_data.get("issue_type", "-"))
+    col2.metric("심각도", result_data.get("severity", "-"))
+    col3.metric("담당팀", result_data.get("owner_team", "-"))
+    col4.metric("사람 검토", "필요" if result_data.get("needs_human_review") else "불필요")
+
+    st.caption(
+        f"저장 일시: {saved_data.get('created_at', '-')}  |  "
+        f"에이전트: {saved_data.get('agent_name', '-')}"
+    )
+
+    if result_data.get("severity") == "높음":
+        st.warning("심각도 높음 — 우선 처리가 필요합니다.")
+    if result_data.get("needs_human_review"):
+        st.warning("담당자 확인 필요")
+
+    summary = result_data.get("summary", "")
+    if summary:
+        st.info(summary)
+
+    st.subheader("고객 답변 방향")
+    st.write(result_data.get("customer_reply_direction", "-"))
+
+    st.subheader("내부 다음 액션")
+    st.write(result_data.get("internal_next_action", "-"))
+
+    safety_notes = result_data.get("safety_notes", [])
+    if safety_notes:
+        st.subheader("안전 메모")
+        for note in safety_notes:
+            st.warning(note)
+
+    with st.expander("사용 도구 및 참고 문서"):
+        st.markdown("**사용 도구**")
+        used_tools = result_data.get("used_tools", [])
+        if used_tools:
+            for tool in used_tools:
+                st.write(f"- {tool}")
+        else:
+            st.write("-")
+        st.markdown("**참고 문서**")
+        source_files = result_data.get("source_files", [])
+        if source_files:
+            for f in source_files:
+                st.write(f"- {f}")
+        else:
+            st.write("-")
+
+    with st.expander("원본 고객 문의"):
+        st.write(saved_data.get("user_question", "-"))
+
+    with st.expander("전체 JSON"):
+        st.json(saved_data)
+
+    st.download_button(
+        label="이 결과 JSON 다운로드",
+        data=json.dumps(saved_data, ensure_ascii=False, indent=2),
+        file_name=file_name,
+        mime="application/json",
+        key=f"{download_key_prefix}_download"
+    )
+
+
+# =========================
 # Streamlit UI 시작
 # =========================
 
@@ -662,108 +803,54 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
                         "error":      str(error)
                     }
 
-            # 오류 표시
+            # 1. 실행 성공/실패 메시지
             if agent_output.get("error"):
                 st.error(f"오류: {agent_output['error']}")
 
             result = agent_output.get("result")
 
-            # ── 구조화 결과 표시 ──────────────────────────────
             if result:
-                st.success("JSON 파싱 성공")
+                st.success("분석 완료 — JSON 파싱 성공")
 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("이슈 유형", result.get("issue_type", "-"))
-                with col2:
-                    st.metric("심각도", result.get("severity", "-"))
-                with col3:
-                    st.metric("담당팀", result.get("owner_team", "-"))
+                # 2~7. 핵심 요약 카드 → 요약 → 고객 답변 방향 → 내부 액션 → 안전 메모 → 도구/문서
+                render_tool_agent_result(result)
 
-                if result.get("needs_human_review"):
-                    st.warning("담당자 확인 필요 (needs_human_review: true)")
-                else:
-                    st.success("일반 처리 가능")
-
-                st.markdown("**요약**")
-                st.write(result.get("summary", "-"))
-
-                st.markdown("**사용 도구**")
-                st.write(", ".join(result.get("used_tools", [])) or "-")
-
-                st.markdown("**참고 문서**")
-                source_files = result.get("source_files", [])
-                if source_files:
-                    for f in source_files:
-                        st.write(f"- {f}")
-                else:
-                    st.write("-")
-
-                st.markdown("**고객 답변 방향**")
-                st.write(result.get("customer_reply_direction", "-"))
-
-                st.markdown("**내부 다음 액션**")
-                st.write(result.get("internal_next_action", "-"))
-
-                st.markdown("**안전 메모**")
-                safety_notes = result.get("safety_notes", [])
-                if safety_notes:
-                    for note in safety_notes:
-                        st.write(f"- {note}")
-                else:
-                    st.write("-")
-
-                # JSON 다운로드 버튼 (기본 권장)
-                st.download_button(
-                    label="JSON 다운로드",
-                    data=json.dumps(result, ensure_ascii=False, indent=2),
-                    file_name="atflee_tool_result.json",
-                    mime="application/json",
-                    key="tool_agent_download"
-                )
-
-                # reports 폴더 저장 버튼
-                if st.button("reports 폴더에 저장", key="tool_agent_save"):
-                    try:
-                        saved_path = save_structured_result(
-                            _PROJECT_ROOT, result, agent_user_question
-                        )
-                        st.success(f"저장 완료: {saved_path}")
-                        st.info(
-                            "Streamlit Cloud에서는 파일이 영구 저장되지 않을 수 있습니다. "
-                            "로컬 실행 시에는 정상 저장됩니다. "
-                            "JSON 다운로드 버튼을 기본으로 사용하세요."
-                        )
-                    except Exception as save_error:
-                        st.error(f"저장 오류: {save_error}")
+                # 8. 다운로드/저장 버튼 같은 줄 배치
+                st.markdown("---")
+                col_dl, col_save = st.columns(2)
+                with col_dl:
+                    st.download_button(
+                        label="JSON 다운로드",
+                        data=json.dumps(result, ensure_ascii=False, indent=2),
+                        file_name="atflee_tool_result.json",
+                        mime="application/json",
+                        key="tool_agent_download"
+                    )
+                with col_save:
+                    if st.button("reports 폴더에 저장", key="tool_agent_save"):
+                        try:
+                            saved_path = save_structured_result(
+                                _PROJECT_ROOT, result, agent_user_question
+                            )
+                            st.success(f"저장 완료: {saved_path}")
+                            st.info(
+                                "Streamlit Cloud에서는 파일이 영구 저장되지 않을 수 있습니다. "
+                                "로컬 실행 시에는 정상 저장됩니다. "
+                                "JSON 다운로드 버튼을 기본으로 사용하세요."
+                            )
+                        except Exception as save_error:
+                            st.error(f"저장 오류: {save_error}")
 
             else:
-                # JSON 파싱 실패 시 원문 표시
-                raw_text = agent_output.get("raw_text", "")
-                if raw_text:
-                    st.warning("JSON 파싱에 실패했습니다. Claude 원문을 확인하세요.")
-                    st.text(raw_text)
+                st.warning("JSON 파싱에 실패했습니다. Claude 원문을 확인하세요.")
+                raw_text_fail = agent_output.get("raw_text", "")
+                if raw_text_fail:
+                    st.text(raw_text_fail)
 
-            # ── 도구 실행 로그 ────────────────────────────────
-            tool_logs = agent_output.get("tool_logs", [])
-            if tool_logs:
-                with st.expander("도구 실행 로그"):
-                    for log in tool_logs:
-                        st.markdown(f"**라운드 {log['round']} — {log['tool_name']}**")
-                        st.markdown("입력")
-                        st.code(
-                            json.dumps(log["tool_input"], ensure_ascii=False, indent=2),
-                            language="json"
-                        )
-                        st.markdown("결과 요약")
-                        result_str = json.dumps(
-                            log["tool_result"], ensure_ascii=False, indent=2
-                        )
-                        # rag_context는 길어서 일부만 표시한다.
-                        st.code(result_str[:1200], language="json")
-                        st.divider()
+            # 9. 도구 실행 로그 expander
+            render_tool_logs(agent_output.get("tool_logs", []))
 
-            # ── Claude 최종 원문 ──────────────────────────────
+            # 10. Claude 최종 원문 expander
             raw_text = agent_output.get("raw_text", "")
             if raw_text:
                 with st.expander("Claude 최종 원문"):
@@ -788,7 +875,6 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
     if not saved_results:
         st.info("아직 저장된 Tool Use Agent 결과가 없습니다.")
     else:
-        # selectbox 표시 레이블: "날짜시간 | 이슈유형 | 심각도 | 담당팀 | 파일명"
         def _make_label(item):
             parts = [
                 item.get("created_at", ""),
@@ -799,7 +885,7 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
             ]
             return " | ".join(parts)
 
-        options      = saved_results
+        options       = saved_results
         option_labels = [_make_label(item) for item in options]
 
         selected_label = st.selectbox(
@@ -808,7 +894,6 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
             key="history_selectbox"
         )
 
-        # 선택된 항목의 인덱스를 찾는다.
         selected_index = option_labels.index(selected_label)
         selected_item  = options[selected_index]
 
@@ -818,65 +903,8 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
             st.error("파일을 읽는 데 실패했습니다.")
         else:
             st.subheader("저장 결과 상세")
-
-            result_data = saved_data.get("result") or {}
-
-            # 핵심 메트릭
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("이슈 유형", result_data.get("issue_type", "-"))
-            with col2:
-                st.metric("심각도", result_data.get("severity", "-"))
-            with col3:
-                st.metric("담당팀", result_data.get("owner_team", "-"))
-
-            st.write(f"**저장 일시:** {saved_data.get('created_at', '-')}")
-            st.write(f"**에이전트:** {saved_data.get('agent_name', '-')}")
-
-            if result_data.get("needs_human_review"):
-                st.warning("담당자 확인 필요 (needs_human_review: true)")
-
-            st.markdown("**요약**")
-            st.write(result_data.get("summary", "-"))
-
-            st.markdown("**사용 도구**")
-            st.write(", ".join(result_data.get("used_tools", [])) or "-")
-
-            st.markdown("**참고 문서**")
-            hist_sources = result_data.get("source_files", [])
-            if hist_sources:
-                for sf in hist_sources:
-                    st.write(f"- {sf}")
-            else:
-                st.write("-")
-
-            st.markdown("**고객 답변 방향**")
-            st.write(result_data.get("customer_reply_direction", "-"))
-
-            st.markdown("**내부 다음 액션**")
-            st.write(result_data.get("internal_next_action", "-"))
-
-            st.markdown("**안전 메모**")
-            hist_notes = result_data.get("safety_notes", [])
-            if hist_notes:
-                for note in hist_notes:
-                    st.write(f"- {note}")
-            else:
-                st.write("-")
-
-            # 원본 고객 문의 expander
-            with st.expander("원본 고객 문의"):
-                st.write(saved_data.get("user_question", "-"))
-
-            # 전체 JSON expander
-            with st.expander("전체 JSON"):
-                st.json(saved_data)
-
-            # 저장 결과 다운로드 버튼
-            st.download_button(
-                label="이 결과 JSON 다운로드",
-                data=json.dumps(saved_data, ensure_ascii=False, indent=2),
+            render_saved_result_detail(
+                saved_data,
                 file_name=selected_item["file_name"],
-                mime="application/json",
-                key="history_download"
+                download_key_prefix="history"
             )
