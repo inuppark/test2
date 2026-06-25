@@ -21,6 +21,12 @@ from utils.rag_utils import (
     TOP_K,
 )
 
+# utils.tool_agent_utils에서 Tool Use Agent 공통 함수를 가져온다.
+from utils.tool_agent_utils import (
+    run_structured_agent,
+    save_structured_result,
+)
+
 # .env 파일 로드
 load_dotenv()
 
@@ -377,7 +383,9 @@ def call_ax_tutor(messages):
 st.title("앳플리 AX Console v0")
 st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
 
-tab_chat, tab_voc, tab_cs, tab_atflee = st.tabs(["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇"])
+tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent = st.tabs(
+    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent"]
+)
 
 
 # =========================
@@ -608,3 +616,156 @@ with tab_atflee:
 
                 except Exception as error:
                     st.error(f"앳플리 봇 답변 생성 중 오류가 발생했습니다: {error}")
+
+
+# =========================
+# 5. Tool Use Agent 탭
+# =========================
+with tab_tool_agent:
+    st.subheader("앳플리 Tool Use Agent")
+    st.write(
+        "고객 문의를 입력하면 Claude가 필요한 도구를 사용해 "
+        "VOC 분류, 앳플리 위키 검색, 구조화 JSON 생성을 수행합니다."
+    )
+
+    _DEFAULT_QUESTION = """고객이 이렇게 문의했습니다.
+
+"앳플리 체중계가 앱이랑 계속 연결이 안 되고,
+AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
+
+이 문의를 처리해서 업무 시스템에 넣을 수 있는 JSON으로 정리해줘."""
+
+    agent_user_question = st.text_area(
+        "고객 문의 입력",
+        value=_DEFAULT_QUESTION,
+        height=180,
+        key="tool_agent_question"
+    )
+
+    if st.button("Tool Use Agent 실행", type="primary", key="tool_agent_run"):
+        if not agent_user_question.strip():
+            st.warning("고객 문의를 입력해주세요.")
+        else:
+            with st.spinner("Tool Use Agent가 도구를 사용해 처리 중입니다..."):
+                try:
+                    agent_output = run_structured_agent(
+                        client, model_name, agent_user_question
+                    )
+                except Exception as error:
+                    agent_output = {
+                        "result":     None,
+                        "raw_text":   "",
+                        "used_tools": [],
+                        "tool_logs":  [],
+                        "error":      str(error)
+                    }
+
+            # 오류 표시
+            if agent_output.get("error"):
+                st.error(f"오류: {agent_output['error']}")
+
+            result = agent_output.get("result")
+
+            # ── 구조화 결과 표시 ──────────────────────────────
+            if result:
+                st.success("JSON 파싱 성공")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("이슈 유형", result.get("issue_type", "-"))
+                with col2:
+                    st.metric("심각도", result.get("severity", "-"))
+                with col3:
+                    st.metric("담당팀", result.get("owner_team", "-"))
+
+                if result.get("needs_human_review"):
+                    st.warning("담당자 확인 필요 (needs_human_review: true)")
+                else:
+                    st.success("일반 처리 가능")
+
+                st.markdown("**요약**")
+                st.write(result.get("summary", "-"))
+
+                st.markdown("**사용 도구**")
+                st.write(", ".join(result.get("used_tools", [])) or "-")
+
+                st.markdown("**참고 문서**")
+                source_files = result.get("source_files", [])
+                if source_files:
+                    for f in source_files:
+                        st.write(f"- {f}")
+                else:
+                    st.write("-")
+
+                st.markdown("**고객 답변 방향**")
+                st.write(result.get("customer_reply_direction", "-"))
+
+                st.markdown("**내부 다음 액션**")
+                st.write(result.get("internal_next_action", "-"))
+
+                st.markdown("**안전 메모**")
+                safety_notes = result.get("safety_notes", [])
+                if safety_notes:
+                    for note in safety_notes:
+                        st.write(f"- {note}")
+                else:
+                    st.write("-")
+
+                # JSON 다운로드 버튼 (기본 권장)
+                st.download_button(
+                    label="JSON 다운로드",
+                    data=json.dumps(result, ensure_ascii=False, indent=2),
+                    file_name="atflee_tool_result.json",
+                    mime="application/json",
+                    key="tool_agent_download"
+                )
+
+                # reports 폴더 저장 버튼
+                if st.button("reports 폴더에 저장", key="tool_agent_save"):
+                    try:
+                        saved_path = save_structured_result(
+                            _PROJECT_ROOT, result, agent_user_question
+                        )
+                        st.success(f"저장 완료: {saved_path}")
+                        st.info(
+                            "Streamlit Cloud에서는 파일이 영구 저장되지 않을 수 있습니다. "
+                            "로컬 실행 시에는 정상 저장됩니다. "
+                            "JSON 다운로드 버튼을 기본으로 사용하세요."
+                        )
+                    except Exception as save_error:
+                        st.error(f"저장 오류: {save_error}")
+
+            else:
+                # JSON 파싱 실패 시 원문 표시
+                raw_text = agent_output.get("raw_text", "")
+                if raw_text:
+                    st.warning("JSON 파싱에 실패했습니다. Claude 원문을 확인하세요.")
+                    st.text(raw_text)
+
+            # ── 도구 실행 로그 ────────────────────────────────
+            tool_logs = agent_output.get("tool_logs", [])
+            if tool_logs:
+                with st.expander("도구 실행 로그"):
+                    for log in tool_logs:
+                        st.markdown(f"**라운드 {log['round']} — {log['tool_name']}**")
+                        st.markdown("입력")
+                        st.code(
+                            json.dumps(log["tool_input"], ensure_ascii=False, indent=2),
+                            language="json"
+                        )
+                        st.markdown("결과 요약")
+                        result_str = json.dumps(
+                            log["tool_result"], ensure_ascii=False, indent=2
+                        )
+                        # rag_context는 길어서 일부만 표시한다.
+                        st.code(result_str[:1200], language="json")
+                        st.divider()
+
+            # ── Claude 최종 원문 ──────────────────────────────
+            raw_text = agent_output.get("raw_text", "")
+            if raw_text:
+                with st.expander("Claude 최종 원문"):
+                    st.code(raw_text, language="json")
+
+    # 보안 안내
+    st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
