@@ -27,8 +27,11 @@ logs/
 # 자동 생성 보고서
 reports/
 
-# RAG 생성 산출물 (청크, 벡터 인덱스 등)
+# RAG 생성 산출물 — 폴더 전체 제외 후 배포용 파일만 예외 허용
 data/rag/
+!data/rag/
+!data/rag/atflee_wiki_chunks.json
+!data/rag/atflee_tfidf_vector_index.json
 
 # 캐시
 .cache/
