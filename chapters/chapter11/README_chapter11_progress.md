@@ -467,8 +467,103 @@ Claude Desktop에서 직접 호출 가능한 MCP 도구가 되었다.
 
 ---
 
-### 다음 단계: 11-7 (후보)
+### 다음 단계: 11-7
 
-- **(A)** AX Console 핵심 기능을 MCP tool로 승격
-  - `generate_cs_reply`, `hybrid_rag_answer`, `analyze_voc` 등
-- **(B)** Chapter 11 마무리 요약 및 전체 흐름 정리
+AX Console 핵심 기능 MCP tool 승격 → `06_atflee_mcp_extended_tools_test.py` 참고
+
+---
+
+## 11-7 AX Console 핵심 기능 MCP tool 승격
+
+### 목적
+
+AX Console에서 구현한 핵심 기능(CS 답변 초안, VOC 구조화 분석, 하이브리드 RAG 답변)을
+MCP tool로 승격해 Claude Desktop에서도 직접 사용할 수 있게 했다.
+
+---
+
+### 추가된 도구 (3개)
+
+| 도구 | 설명 |
+|---|---|
+| `generate_cs_reply` | 고객 문의 → 앳플리 기준 CS 답변 초안 생성 (Claude 기반) |
+| `analyze_atflee_voc` | 고객 문의 → 이슈 유형/감정/원인/응대 방향 구조화 분석 (Claude 기반) |
+| `hybrid_rag_answer` | 질문 → 하이브리드/키워드 RAG 검색 + Claude 근거 기반 답변 |
+
+---
+
+### 전체 MCP tool 목록 (7개)
+
+| 순서 | 도구 | 추가 시점 |
+|---|---|---|
+| 1 | `get_atflee_status` | 11-2 |
+| 2 | `list_atflee_tools` | 11-2 |
+| 3 | `search_atflee_wiki` | 11-2 |
+| 4 | `classify_atflee_voc` | 11-2 |
+| 5 | `generate_cs_reply` | **11-7** |
+| 6 | `analyze_atflee_voc` | **11-7** |
+| 7 | `hybrid_rag_answer` | **11-7** |
+
+---
+
+### 생성/수정 파일
+
+| 파일 | 변경 |
+|---|---|
+| `utils/atflee_mcp_business_tools.py` | 신규 — 3개 도구 핵심 비즈니스 로직 공통 유틸 |
+| `chapters/chapter11/02_atflee_mcp_server_basic.py` | 수정 — 3개 tool 추가, 기존 2개 tool 업데이트 |
+| `chapters/chapter11/06_atflee_mcp_extended_tools_test.py` | 신규 — 확장 도구 테스트 클라이언트 |
+
+---
+
+### 테스트 결과
+
+| 도구 | 입력 | 결과 |
+|---|---|---|
+| `generate_cs_reply` | "제품 불량 교환 답변" | reply 생성, needs_human_review=True |
+| `analyze_atflee_voc` | "앱 연결 불만 + CS 답변 지연" | 앱연결/CS 중간 심각도, 앱/CS팀 |
+| `hybrid_rag_answer` | "제품 불량 교환 방법" | **hybrid** 경로, customer_service_policy.md TOP 1 |
+
+---
+
+### hybrid_rag_answer 작동 방식
+
+실행 시 Upstage 인덱스 존재 여부에 따라 자동 분기:
+- Upstage 인덱스 존재 → `hybrid` (키워드 0.4 + Upstage 0.6 + overlap_bonus 0.2)
+- 인덱스 없음 → `keyword_fallback` (data/wiki 키워드 검색만)
+
+이번 테스트에서는 **hybrid** 경로로 실행됨.
+
+---
+
+### 실행 명령어
+
+```bash
+# 테스트 실행
+python chapters/chapter11/06_atflee_mcp_extended_tools_test.py
+
+# 컴파일 검증
+python -m py_compile chapters/chapter11/02_atflee_mcp_server_basic.py
+python -m py_compile utils/atflee_mcp_business_tools.py
+python -m py_compile chapters/chapter11/06_atflee_mcp_extended_tools_test.py
+```
+
+---
+
+### Claude Desktop 반영
+
+MCP 서버 파일(`02_atflee_mcp_server_basic.py`)이 변경되었으므로
+Claude Desktop을 **완전 종료 후 재시작**해야 새 7개 도구가 반영된다.
+
+새 도구로 테스트할 질문:
+```
+CS 답변 초안 만들어줘. 고객 문의: 제품이 불량 같고 교환하고 싶어요.
+앳플리 VOC 분석해줘. 고객 문의: 앱 연결이 안 되고 고객센터가 늦게 답해서 화가 납니다.
+교환 절차를 하이브리드 RAG로 찾아줘.
+```
+
+---
+
+### 다음 단계: Chapter 11 마무리
+
+전체 흐름이 완성되었으므로 Chapter 11 요약 또는 Chapter 12로 진행 가능.

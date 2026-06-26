@@ -29,6 +29,14 @@ WIKI_DIR     = os.path.join(PROJECT_ROOT, "data", "wiki")
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# 확장 비즈니스 도구 (Chapter 11-7)
+from utils.atflee_mcp_business_tools import (
+    generate_cs_reply_core,
+    analyze_atflee_voc_core,
+    hybrid_rag_answer_core,
+    get_hybrid_rag_status,
+)
+
 # MCP 서버 생성
 mcp = FastMCP("atflee-mcp-server-v0")
 
@@ -100,22 +108,28 @@ def _extract_snippet(question: str, content: str, max_chars: int = 300) -> str:
 @mcp.tool
 def get_atflee_status() -> Dict[str, Any]:
     """
-    앳플리 MCP 서버 v0의 현재 상태를 반환한다.
-    서버가 살아있는지, 어떤 도구를 제공하는지 확인할 때 사용한다.
+    앳플리 MCP 서버의 현재 상태를 반환한다.
+    서버 상태, 위키 문서 수, 도구 수, 하이브리드 RAG 사용 가능 여부를 확인할 때 사용한다.
     """
-    wiki_count = len(read_wiki_files())
+    wiki_count  = len(read_wiki_files())
+    rag_status  = get_hybrid_rag_status()
 
     return {
-        "service":         "atflee-mcp-server-v0",
-        "status":          "ready",
-        "description":     "앳플리 위키 검색, VOC 분류, 도구 목록 확인을 제공하는 MCP 서버입니다.",
-        "wiki_doc_count":  wiki_count,
-        "wiki_dir":        WIKI_DIR,
+        "service":              "atflee-mcp-server-v0",
+        "status":               "ready",
+        "description":          "앳플리 위키 검색, VOC 분류/분석, CS 답변 초안, 하이브리드 RAG 답변을 제공하는 MCP 서버입니다.",
+        "wiki_doc_count":       wiki_count,
+        "tool_count":           7,
+        "hybrid_rag_available": rag_status["hybrid_available"],
+        "upstage_index_exists": rag_status["upstage_index_exists"],
         "available_tools": [
             "get_atflee_status",
             "list_atflee_tools",
             "search_atflee_wiki",
             "classify_atflee_voc",
+            "generate_cs_reply",
+            "analyze_atflee_voc",
+            "hybrid_rag_answer",
         ],
     }
 
@@ -133,7 +147,7 @@ def list_atflee_tools() -> Dict[str, Any]:
         "tools": [
             {
                 "name":        "get_atflee_status",
-                "description": "앳플리 MCP 서버 상태 확인",
+                "description": "앳플리 MCP 서버 상태 확인 (도구 수, RAG 가용 여부 포함)",
             },
             {
                 "name":        "list_atflee_tools",
@@ -141,11 +155,23 @@ def list_atflee_tools() -> Dict[str, Any]:
             },
             {
                 "name":        "search_atflee_wiki",
-                "description": "data/wiki 문서에서 질문과 관련 있는 앳플리 정보를 검색",
+                "description": "data/wiki 문서에서 질문과 관련 있는 앳플리 정보를 키워드 검색",
             },
             {
                 "name":        "classify_atflee_voc",
-                "description": "고객 문의를 유형, 심각도, 담당팀 기준으로 간단 분류",
+                "description": "고객 문의를 유형, 심각도, 담당팀 기준으로 규칙 기반 간단 분류",
+            },
+            {
+                "name":        "generate_cs_reply",
+                "description": "고객 문의를 받아 앳플리 기준 CS 답변 초안을 생성 (Claude 기반, 사람 검토 필요 여부 포함)",
+            },
+            {
+                "name":        "analyze_atflee_voc",
+                "description": "고객 문의를 구조화 VOC 분석 (이슈 유형, 감정, 원인 후보, 응대 방향 포함, Claude 기반)",
+            },
+            {
+                "name":        "hybrid_rag_answer",
+                "description": "질문에 대해 하이브리드 또는 키워드 RAG로 앳플리 문서를 검색하고 Claude가 근거 기반 답변 생성",
             },
         ]
     }
@@ -254,6 +280,55 @@ def classify_atflee_voc(customer_message: str) -> Dict[str, Any]:
 
 
 # ==============================
+# MCP tool 5: CS 답변 초안 생성 (Chapter 11-7)
+# ==============================
+@mcp.tool
+def generate_cs_reply(customer_message: str, tone: str = "정중하고 친절하게") -> Dict[str, Any]:
+    """
+    고객 문의를 받아 앳플리 기준에 맞는 안전한 CS 답변 초안을 생성한다.
+    ANTHROPIC_API_KEY가 필요하다. 불량/교환/AS 등은 needs_human_review=true로 표시한다.
+
+    Args:
+        customer_message: 고객이 보낸 문의 원문
+        tone: 답변 톤 (기본값: "정중하고 친절하게")
+    """
+    return generate_cs_reply_core(customer_message, tone)
+
+
+# ==============================
+# MCP tool 6: VOC 구조화 분석 (Chapter 11-7)
+# ==============================
+@mcp.tool
+def analyze_atflee_voc(customer_message: str) -> Dict[str, Any]:
+    """
+    고객 문의를 Claude로 구조화 분석한다.
+    classify_atflee_voc보다 풍부한 분석(감정, 원인 후보, 응대 방향, 다음 액션)을 제공한다.
+    ANTHROPIC_API_KEY가 필요하다.
+
+    Args:
+        customer_message: 분석할 고객 문의 원문
+    """
+    return analyze_atflee_voc_core(customer_message)
+
+
+# ==============================
+# MCP tool 7: 하이브리드 RAG 답변 생성 (Chapter 11-7)
+# ==============================
+@mcp.tool
+def hybrid_rag_answer(question: str, top_k: int = 3) -> Dict[str, Any]:
+    """
+    질문에 대해 앳플리 문서를 검색하고 Claude가 근거 기반 답변을 생성한다.
+    UPSTAGE_API_KEY와 Upstage 인덱스가 있으면 하이브리드 검색, 없으면 키워드 검색으로 폴백한다.
+    ANTHROPIC_API_KEY가 필요하다.
+
+    Args:
+        question: 검색할 질문
+        top_k: 최대 참고 문서 수 (기본값 3)
+    """
+    return hybrid_rag_answer_core(question, top_k)
+
+
+# ==============================
 # 실행부
 # ==============================
 if __name__ == "__main__":
@@ -262,10 +337,13 @@ if __name__ == "__main__":
     print(f"위키 경로: {WIKI_DIR}")
     print()
     print("등록된 도구:")
-    print("  1. get_atflee_status    - 서버 상태 확인")
+    print("  1. get_atflee_status    - 서버 상태 확인 (tool_count=7)")
     print("  2. list_atflee_tools    - 도구 목록 반환")
     print("  3. search_atflee_wiki   - data/wiki 문서 검색")
-    print("  4. classify_atflee_voc  - 고객 문의 VOC 분류")
+    print("  4. classify_atflee_voc  - 고객 문의 VOC 간단 분류")
+    print("  5. generate_cs_reply    - CS 답변 초안 생성 (Claude 기반)")
+    print("  6. analyze_atflee_voc   - VOC 구조화 분석 (Claude 기반)")
+    print("  7. hybrid_rag_answer    - 하이브리드/키워드 RAG 답변 생성")
     print()
     print("이 파일은 MCP 서버로 실행됩니다.")
     print("Claude Desktop 또는 MCP 클라이언트에서 연결해 사용할 수 있습니다.")
