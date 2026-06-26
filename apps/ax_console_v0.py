@@ -38,6 +38,14 @@ from utils.vector_rag_utils import (
     format_vector_results_for_display,
 )
 
+# utils.upstage_rag_utils에서 Upstage Embedding RAG 함수를 가져온다. (Chapter 10-12)
+from utils.upstage_rag_utils import (
+    load_upstage_index,
+    search_upstage_chunks,
+    build_upstage_rag_context,
+    get_upstage_index_status,
+)
+
 # .env 파일 로드
 load_dotenv()
 
@@ -449,6 +457,78 @@ def ask_claude_with_vector_rag(question, vector_results):
 
 
 # =========================
+# Upstage RAG 관련 함수 (Chapter 10-12)
+# =========================
+
+def get_upstage_api_key():
+    """
+    Upstage API Key를 반환한다.
+    Streamlit Cloud: st.secrets["UPSTAGE_API_KEY"]
+    로컬:            .env의 UPSTAGE_API_KEY
+    값은 절대 출력하지 않는다.
+    """
+    try:
+        if "UPSTAGE_API_KEY" in st.secrets:
+            return st.secrets["UPSTAGE_API_KEY"]
+    except Exception:
+        pass
+
+    return os.getenv("UPSTAGE_API_KEY")
+
+
+def ask_claude_with_upstage_rag(question, upstage_results):
+    """
+    Upstage 검색 결과를 Context로 Claude에게 답변을 요청한다.
+    build_upstage_rag_context는 utils.upstage_rag_utils에서 가져온다.
+    """
+    upstage_rag_context = build_upstage_rag_context(upstage_results)
+
+    system_prompt = """
+# Role
+너는 앳플리 Upstage Embedding RAG 답변 봇이다.
+
+# Goal
+사용자 질문에 대해 Upstage Embedding 검색으로 찾은 앳플리 위키 청크를 근거로 쉽고 안전하게 답변한다.
+
+# Rules
+* <upstage_rag_context>에 있는 정보만 확정적으로 말한다.
+* Context에 없는 내용은 추측하지 않는다.
+* 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
+* 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
+* 개인정보, 주문번호, 연락처, 주소 등 민감정보는 공개 채팅에 입력하지 않도록 안내한다.
+* 검색 결과의 유사도가 낮으면 "정확한 확인이 필요합니다"라고 안내한다.
+* 답변 마지막에는 참고한 source_file과 chunk_id를 표시한다.
+
+# Output Format
+아래 형식으로 답변한다.
+
+1. 간단한 답변
+2. 근거가 되는 앳플리 위키 정보
+3. 바로 해볼 수 있는 것
+4. 확인이 필요한 것
+5. 참고 청크
+"""
+
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=1200,
+        temperature=0.2,
+        system=system_prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"<upstage_rag_context>\n{upstage_rag_context}\n</upstage_rag_context>\n\n"
+                    f"<user_question>\n{question}\n</user_question>"
+                )
+            }
+        ]
+    )
+
+    return response.content[0].text
+
+
+# =========================
 # Prompt Caching 헬퍼
 # =========================
 
@@ -620,8 +700,8 @@ def render_saved_result_detail(saved_data, file_name="result.json", download_key
 st.title("앳플리 AX Console v0")
 st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
 
-tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent, tab_vector_rag = st.tabs(
-    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent", "벡터 RAG"]
+tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent, tab_vector_rag, tab_upstage_rag = st.tabs(
+    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent", "벡터 RAG", "Upstage RAG"]
 )
 
 
@@ -1164,3 +1244,109 @@ with tab_vector_rag:
 
         # 보안 안내
         st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
+
+
+# =========================
+# 7. Upstage RAG 탭 (Chapter 10-12)
+# =========================
+with tab_upstage_rag:
+    st.subheader("앳플리 Upstage RAG")
+    st.write(
+        "Upstage Embedding으로 data/wiki 청크를 의미 기반 검색하고, "
+        "선택된 청크를 근거로 Claude가 답변합니다."
+    )
+    st.info("이 탭은 Chapter 10 선택 실습용입니다. Upstage API 호출 비용이 발생할 수 있습니다.")
+
+    # 인덱스 상태 표시
+    _upstage_status = get_upstage_index_status()
+
+    if _upstage_status["exists"]:
+        st.caption(
+            f"인덱스 로드 완료 — "
+            f"청크 수: {_upstage_status['chunk_count']} / "
+            f"임베딩 차원: {_upstage_status['embedding_dimension']} / "
+            f"생성일: {_upstage_status['created_at']}"
+        )
+    else:
+        st.error("Upstage 임베딩 인덱스가 없습니다.")
+        st.markdown(
+            "**로컬에서 먼저 실행하세요:**\n"
+            "```bash\n"
+            "python chapters/chapter10/07_atflee_upstage_embedding_practice.py\n"
+            "```"
+        )
+        st.markdown(
+            "**Streamlit Cloud에서 사용하려면:**\n"
+            "- `data/rag/atflee_upstage_embedding_index.json`을 Git에 포함하거나\n"
+            "- 앱에서 인덱스 생성 기능을 별도로 구현해야 합니다."
+        )
+
+    # 질문 입력
+    _upstage_question = st.text_input(
+        "질문을 입력하세요",
+        value="제품이 불량 같고 교환하고 싶어요. 어떻게 해야 해요?",
+        key="upstage_rag_question"
+    )
+
+    if st.button("Upstage RAG 답변 생성", type="primary", key="upstage_rag_run"):
+        if not _upstage_question.strip():
+            st.warning("질문을 입력해주세요.")
+        elif not _upstage_status["exists"]:
+            st.error("Upstage 임베딩 인덱스가 없어 실행할 수 없습니다. 위 안내를 따라 인덱스를 먼저 생성하세요.")
+        else:
+            _upstage_api_key = get_upstage_api_key()
+
+            if not _upstage_api_key:
+                st.error(
+                    "UPSTAGE_API_KEY가 설정되어 있지 않습니다. "
+                    "로컬은 .env, 배포는 Streamlit Secrets에 등록하세요."
+                )
+            else:
+                with st.spinner("Upstage 검색 및 Claude 답변 생성 중..."):
+                    try:
+                        # 1단계: 인덱스 캐시 (세션당 한 번만 파일 읽기)
+                        if "upstage_index_payload" not in st.session_state:
+                            st.session_state.upstage_index_payload = load_upstage_index()
+
+                        _up_index = st.session_state.upstage_index_payload
+
+                        # 2단계: Upstage 임베딩 검색 TOP 3
+                        _up_output = search_upstage_chunks(
+                            _upstage_question,
+                            _upstage_api_key,
+                            index_payload=_up_index,
+                            top_k=3
+                        )
+
+                        _up_error   = _up_output.get("error")
+                        _up_results = _up_output.get("results", [])
+
+                        if _up_error:
+                            st.error(f"Upstage 검색 오류: {_up_error}")
+                        else:
+                            # 3단계: 검색 결과 TOP 3 표시
+                            _max_sim = max((r["similarity"] for r in _up_results), default=0)
+                            if _max_sim < 0.2:
+                                st.warning("검색 유사도가 낮습니다. 답변 품질이 낮을 수 있습니다.")
+
+                            with st.expander("Upstage 검색 TOP 3"):
+                                for _rank, _res in enumerate(_up_results, start=1):
+                                    st.markdown(
+                                        f"**{_rank}위** `{_res['source_file']}` / "
+                                        f"`{_res['chunk_id']}` / 유사도: `{_res['similarity']:.4f}`"
+                                    )
+                                    st.caption(_res["text"][:300])
+                                    st.divider()
+
+                            # 4단계: Claude Upstage RAG 답변 생성
+                            st.markdown("### Claude Upstage RAG 답변")
+                            _up_answer = ask_claude_with_upstage_rag(
+                                _upstage_question, _up_results
+                            )
+                            st.markdown(_up_answer)
+
+                    except Exception as _up_err:
+                        st.error(f"Upstage RAG 처리 중 오류가 발생했습니다: {_up_err}")
+
+    # 보안 안내
+    st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
