@@ -451,7 +451,7 @@ if __name__ == "__main__":
         print("먼저 아래 명령어를 실행하세요.")
         print("  python chapters/chapter10/07_atflee_upstage_embedding_practice.py")
     else:
-        print(f"Upstage 인덱스 로드 완료 — 청크 수: {upstage_index.get('chunk_count')}, "
+        print(f"Upstage 인덱스 로드 완료 / 청크 수: {upstage_index.get('chunk_count')}, "
               f"임베딩 차원: {upstage_index.get('embedding_dimension')}")
 
         # 질문별 3-way 비교
