@@ -46,6 +46,12 @@ from utils.upstage_rag_utils import (
     get_upstage_index_status,
 )
 
+# utils.hybrid_rag_utils에서 하이브리드 RAG 함수를 가져온다. (Chapter 10-14)
+from utils.hybrid_rag_utils import (
+    search_hybrid_rag,
+    build_hybrid_rag_context,
+)
+
 # .env 파일 로드
 load_dotenv()
 
@@ -529,6 +535,63 @@ def ask_claude_with_upstage_rag(question, upstage_results):
 
 
 # =========================
+# 하이브리드 RAG Claude 답변 함수 (Chapter 10-14)
+# =========================
+
+def ask_claude_with_hybrid_rag(question, hybrid_results):
+    """
+    하이브리드 검색 결과를 Context로 Claude에게 답변을 요청한다.
+    build_hybrid_rag_context는 utils.hybrid_rag_utils에서 가져온다.
+    """
+    hybrid_rag_context = build_hybrid_rag_context(hybrid_results)
+
+    system_prompt = """
+# Role
+너는 앳플리 하이브리드 RAG 답변 봇이다.
+
+# Goal
+사용자 질문에 대해 키워드 검색과 Upstage Embedding 검색을 함께 활용해 찾은 앳플리 위키 근거로 안전하게 답변한다.
+
+# Rules
+- <hybrid_rag_context>에 있는 정보만 확정적으로 말한다.
+- Context에 없는 내용은 추측하지 않는다.
+- 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
+- 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
+- 개인정보, 주문번호, 연락처, 주소 등 민감정보는 공개 채팅에 입력하지 않도록 안내한다.
+- 답변 마지막에는 참고한 source_file과 chunk_id를 표시한다.
+- chunk_id가 None이면 "문서 단위 검색 결과"라고 표시한다.
+- 검색 결과가 부족하면 "정확한 확인이 필요합니다"라고 말한다.
+
+# Output Format
+아래 형식으로 답변한다.
+
+1. 간단한 답변
+2. 근거가 되는 앳플리 위키 정보
+3. 바로 해볼 수 있는 것
+4. 확인이 필요한 것
+5. 참고 문서/청크
+"""
+
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=1200,
+        temperature=0.2,
+        system=system_prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"<hybrid_rag_context>\n{hybrid_rag_context}\n</hybrid_rag_context>\n\n"
+                    f"<user_question>\n{question}\n</user_question>"
+                )
+            }
+        ]
+    )
+
+    return response.content[0].text
+
+
+# =========================
 # Prompt Caching 헬퍼
 # =========================
 
@@ -700,8 +763,8 @@ def render_saved_result_detail(saved_data, file_name="result.json", download_key
 st.title("앳플리 AX Console v0")
 st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
 
-tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent, tab_vector_rag, tab_upstage_rag = st.tabs(
-    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent", "벡터 RAG", "Upstage RAG"]
+tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent, tab_vector_rag, tab_upstage_rag, tab_hybrid_rag = st.tabs(
+    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent", "벡터 RAG", "Upstage RAG", "하이브리드 RAG"]
 )
 
 
@@ -1347,6 +1410,147 @@ with tab_upstage_rag:
 
                     except Exception as _up_err:
                         st.error(f"Upstage RAG 처리 중 오류가 발생했습니다: {_up_err}")
+
+    # 보안 안내
+    st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
+
+
+# =========================
+# 8. 하이브리드 RAG 탭 (Chapter 10-14)
+# =========================
+with tab_hybrid_rag:
+    st.subheader("앳플리 하이브리드 RAG")
+    st.write(
+        "키워드 검색과 Upstage Embedding 검색을 함께 사용해 "
+        "더 안정적인 근거 문서를 찾고, Claude가 답변합니다."
+    )
+    st.info("이 탭은 Chapter 10 선택 실습용입니다. Upstage API 호출 비용이 발생할 수 있습니다.")
+
+    with st.expander("하이브리드 검색이란?"):
+        st.markdown(
+            "- **키워드 검색**: 질문 단어와 문서 단어가 직접 겹치는 경우 강함\n"
+            "- **Upstage 검색**: 표현이 달라도 의미가 가까운 문서를 찾는 데 강함\n"
+            "- **하이브리드 검색**: 두 결과를 합치고 중복 등장 문서에 overlap bonus를 부여해 안정성 향상"
+        )
+
+    # Upstage 인덱스 상태 확인
+    _hyb_index_status = get_upstage_index_status()
+
+    if _hyb_index_status["exists"]:
+        st.caption(
+            f"Upstage 인덱스 — "
+            f"청크 수: {_hyb_index_status['chunk_count']} / "
+            f"임베딩 차원: {_hyb_index_status['embedding_dimension']} / "
+            f"생성일: {_hyb_index_status['created_at']}"
+        )
+    else:
+        st.warning(
+            "Upstage 임베딩 인덱스가 없습니다. "
+            "키워드 검색 fallback만 동작합니다. "
+            "로컬에서 `python chapters/chapter10/07_atflee_upstage_embedding_practice.py`를 "
+            "실행해 생성하거나, 인덱스 파일을 배포에 포함하세요."
+        )
+
+    # 질문 입력
+    _hyb_question = st.text_input(
+        "질문을 입력하세요",
+        value="제품이 불량 같고 교환하고 싶어요. 어떻게 해야 해요?",
+        key="hybrid_rag_question"
+    )
+
+    if st.button("하이브리드 RAG 답변 생성", type="primary", key="hybrid_rag_run"):
+        if not _hyb_question.strip():
+            st.warning("질문을 입력해주세요.")
+        else:
+            _hyb_api_key = get_upstage_api_key()
+
+            if not _hyb_api_key:
+                st.error(
+                    "UPSTAGE_API_KEY가 설정되어 있지 않습니다. "
+                    "로컬은 .env, 배포는 Streamlit Secrets에 등록하세요."
+                )
+            else:
+                with st.spinner("하이브리드 검색 및 Claude 답변 생성 중..."):
+                    try:
+                        # 1단계: 하이브리드 검색 (키워드 + Upstage)
+                        _hyb_payload = search_hybrid_rag(
+                            question=_hyb_question,
+                            upstage_api_key=_hyb_api_key,
+                            top_k=3
+                        )
+
+                        _hyb_error   = _hyb_payload.get("error")
+                        _hyb_results = _hyb_payload.get("hybrid_results", [])
+
+                        if _hyb_error:
+                            st.warning(
+                                f"Upstage 검색 오류로 키워드 결과만 사용합니다: {_hyb_error}"
+                            )
+
+                        # 2단계: 키워드 검색 결과 표시
+                        with st.expander("키워드 검색 결과"):
+                            _kw_items = _hyb_payload.get("keyword_results", [])
+                            if _kw_items:
+                                for _ki in _kw_items:
+                                    st.markdown(
+                                        f"**{_ki['rank']}위** `{_ki['source_file']}` / "
+                                        f"score: `{_ki['raw_score']}`"
+                                    )
+                                    if _ki.get("text"):
+                                        st.caption(_ki["text"][:200])
+                                    st.divider()
+                            else:
+                                st.write("키워드 검색 결과 없음")
+
+                        # 3단계: Upstage 검색 결과 표시
+                        with st.expander("Upstage 검색 결과"):
+                            _up_items = _hyb_payload.get("upstage_results", [])
+                            if _up_items:
+                                for _ui in _up_items:
+                                    st.markdown(
+                                        f"**{_ui['rank']}위** `{_ui['source_file']}` / "
+                                        f"`{_ui['chunk_id']}` / "
+                                        f"similarity: `{_ui['raw_score']:.4f}`"
+                                    )
+                                    if _ui.get("text"):
+                                        st.caption(_ui["text"][:200])
+                                    st.divider()
+                            else:
+                                st.write("Upstage 검색 결과 없음 (인덱스 없거나 API 오류)")
+
+                        # 4단계: 하이브리드 최종 TOP 3 표시
+                        with st.expander("하이브리드 최종 TOP 3"):
+                            if _hyb_results:
+                                for _hrank, _hr in enumerate(_hyb_results, start=1):
+                                    _chunk_label = _hr.get("chunk_id") or "문서 단위 결과"
+                                    st.markdown(
+                                        f"**{_hrank}위** `{_hr['source_file']}` / "
+                                        f"`{_chunk_label}`"
+                                    )
+                                    st.markdown(
+                                        f"hybrid_score: `{_hr['hybrid_score']:.4f}` / "
+                                        f"keyword: `{_hr['keyword_score']:.4f}` / "
+                                        f"upstage: `{_hr['upstage_score']:.4f}` / "
+                                        f"sources: `{', '.join(_hr['sources'])}`"
+                                    )
+                                    if _hr.get("text"):
+                                        st.caption(_hr["text"][:300])
+                                    st.divider()
+                            else:
+                                st.write("하이브리드 결과 없음")
+
+                        # 5단계: Claude 하이브리드 RAG 답변
+                        if _hyb_results:
+                            st.markdown("### Claude 하이브리드 RAG 답변")
+                            _hyb_answer = ask_claude_with_hybrid_rag(
+                                _hyb_question, _hyb_results
+                            )
+                            st.markdown(_hyb_answer)
+                        else:
+                            st.warning("검색 결과가 없어 Claude 답변을 생성할 수 없습니다.")
+
+                    except Exception as _hyb_err:
+                        st.error(f"하이브리드 RAG 처리 중 오류가 발생했습니다: {_hyb_err}")
 
     # 보안 안내
     st.caption("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
