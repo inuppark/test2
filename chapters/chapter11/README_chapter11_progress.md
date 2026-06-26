@@ -87,11 +87,68 @@ python chapters/chapter11/01_atflee_react_agent_basic.py
 
 ### 다음 단계: 11-2
 
-Claude `tool_use` API를 이용해 Python 규칙 없이 Claude 스스로 도구를 선택하는 에이전트 구현.
+MCP 서버 구조 실습 → `02_atflee_mcp_server_basic.py` 참고
 
-- Claude에게 도구 스키마(`tools=[]`)를 전달
-- Claude가 `tool_use` 블록으로 도구를 선택
-- Python이 해당 도구를 실행하고 `tool_result`로 결과를 돌려줌
-- Claude가 최종 답변 생성
+---
 
-이 구조가 진정한 자율 ReAct 에이전트이며, MCP 서버 연동 전 단계이다.
+## 11-2 MCP Server Basic
+
+### 목적
+
+앳플리 도구들을 MCP(Model Context Protocol) 서버 형태로 외부에 노출한다.
+11-1에서 Python 코드 안에서 직접 실행했던 도구들을 표준 MCP tool로 감싼다.
+Claude Desktop 또는 MCP 클라이언트가 연결해 앳플리 도구를 표준 프로토콜로 호출할 수 있다.
+
+---
+
+### 생성 파일
+
+| 파일 | 설명 |
+|---|---|
+| `chapters/chapter11/02_atflee_mcp_server_basic.py` | FastMCP 기반 앳플리 MCP 서버 v0 |
+
+---
+
+### 주요 도구 (MCP tool)
+
+| 도구 | 설명 |
+|---|---|
+| `get_atflee_status` | 서버 상태, 위키 문서 수, 사용 가능 도구 목록 반환 |
+| `list_atflee_tools` | 등록된 MCP 도구 이름과 설명 목록 반환 |
+| `search_atflee_wiki` | `data/wiki` 문서를 키워드 스코어링으로 TOP K 검색 |
+| `classify_atflee_voc` | 고객 문의를 의도/심각도/담당팀 기준으로 규칙 분류 |
+
+---
+
+### 실행 명령어
+
+```bash
+# MCP 서버 실행 (Ctrl+C로 종료)
+python chapters/chapter11/02_atflee_mcp_server_basic.py
+
+# 문법 검증만
+python -m py_compile chapters/chapter11/02_atflee_mcp_server_basic.py
+```
+
+사전 조건:
+- `pip install fastmcp` 완료 (requirements.txt에 추가됨)
+- `data/wiki/*.md` 파일 존재
+
+---
+
+### 11-1 ReAct vs 11-2 MCP Server 차이
+
+| 항목 | 11-1 ReAct (콘솔 실습) | 11-2 MCP Server |
+|---|---|---|
+| 도구 실행 방식 | Python 코드가 직접 함수 호출 | MCP 클라이언트가 표준 프로토콜로 호출 |
+| 외부 연결 | 없음 (단독 실행) | Claude Desktop, MCP 클라이언트 연결 가능 |
+| 확장성 | 파일 내 함수 추가로만 확장 | `@mcp.tool` 데코레이터로 어디서나 도구 추가 가능 |
+
+---
+
+### 다음 단계: 11-3
+
+MCP 클라이언트 테스트:
+- Python MCP 클라이언트(`fastmcp` 또는 `mcp` SDK)로 이 서버에 연결
+- `search_atflee_wiki`, `classify_atflee_voc`를 클라이언트에서 호출
+- Claude `tool_use` API와 MCP 서버를 연결하는 에이전트 구현
