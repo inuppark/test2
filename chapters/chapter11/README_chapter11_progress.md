@@ -312,7 +312,84 @@ python chapters/chapter11/04_atflee_claude_mcp_tool_agent.py
 
 ### 다음 단계: 11-5
 
-- **(A) AX Console 연동**: `ax_console_v0.py`에 MCP 서버 연동 탭 추가
-- **(B) Claude Desktop 연동**: `claude_desktop_config.json`에 앳플리 MCP 서버 등록
+Claude Desktop config 예시 생성 → `05_atflee_claude_desktop_config_example.py` 참고
 
-두 방향 모두 가능하며, Claude Desktop 연동이 더 빠른 체감 가능 경로다.
+---
+
+## 11-5 Claude Desktop Config Example
+
+### 목적
+
+앳플리 MCP 서버 v0를 Claude Desktop에서 연결하기 위한
+`mcpServers` 설정 예시 JSON과 안내 문서를 생성한다.
+
+이 단계는 실제 Claude Desktop config를 자동으로 수정하지 않는다.
+생성된 예시를 사용자가 확인하고 수동으로 반영한다.
+
+---
+
+### 생성 파일
+
+| 파일 | 설명 |
+|---|---|
+| `chapters/chapter11/05_atflee_claude_desktop_config_example.py` | config 예시 생성 스크립트 |
+| `chapters/chapter11/claude_desktop_config_atflee_example.json` | Claude Desktop mcpServers 설정 예시 |
+| `chapters/chapter11/README_claude_desktop_mcp_setup.md` | Claude Desktop 연결 가이드 |
+
+---
+
+### 생성된 config 예시
+
+```json
+{
+  "mcpServers": {
+    "atflee-mcp-server-v0": {
+      "command": "E:\\ipark\\.venv\\Scripts\\python.exe",
+      "args": [
+        "E:\\ipark\\chapters\\chapter11\\02_atflee_mcp_server_basic.py"
+      ]
+    }
+  }
+}
+```
+
+---
+
+### 실행 명령어
+
+```bash
+# config 예시 생성
+python chapters/chapter11/05_atflee_claude_desktop_config_example.py
+```
+
+사전 조건:
+- `02_atflee_mcp_server_basic.py` 존재
+- `pip install fastmcp` 완료
+
+---
+
+### Claude Desktop 반영 절차
+
+1. `%APPDATA%\Claude\claude_desktop_config.json` 열기
+2. `claude_desktop_config_atflee_example.json`의 `mcpServers` 내용 병합
+3. Claude Desktop 완전 종료 후 재시작
+4. 새 대화에서 도구 아이콘 확인
+
+자세한 절차는 `README_claude_desktop_mcp_setup.md` 참고.
+
+---
+
+### 11-4 vs 11-5 차이
+
+| 항목 | 11-4 Claude + MCP Agent | 11-5 Claude Desktop Config |
+|---|---|---|
+| 연결 방식 | Python 코드(`Client(path)`)로 직접 연결 | Claude Desktop이 config를 읽어 자동 연결 |
+| Claude 사용 방법 | `anthropic.Anthropic()` SDK 코드 | Claude Desktop 채팅창 UI |
+| 설정 파일 | 없음 (코드가 서버를 직접 실행) | `claude_desktop_config.json` 등록 필요 |
+
+---
+
+### 다음 단계: 11-6
+
+- **(A)** 실제 Claude Desktop에서 앳플리 MCP 도구 연결 테스트 (UI 확인)
+- **(B)** AX Console에 MCP 에이전트 탭 추가 (`ax_console_v0.py` 업데이트)

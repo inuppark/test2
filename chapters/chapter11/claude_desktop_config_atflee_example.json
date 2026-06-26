@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "atflee-mcp-server-v0": {
+      "command": "E:\\ipark\\.venv\\Scripts\\python.exe",
+      "args": [
+        "E:\\ipark\\chapters\\chapter11\\02_atflee_mcp_server_basic.py"
+      ]
+    }
+  }
+}
