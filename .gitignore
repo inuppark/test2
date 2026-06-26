@@ -32,6 +32,7 @@ data/rag/
 !data/rag/
 !data/rag/atflee_wiki_chunks.json
 !data/rag/atflee_tfidf_vector_index.json
+!data/rag/atflee_upstage_embedding_index.json
 
 # 캐시
 .cache/
