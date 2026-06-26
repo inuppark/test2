@@ -46,10 +46,12 @@ from utils.upstage_rag_utils import (
     get_upstage_index_status,
 )
 
-# utils.hybrid_rag_utils에서 하이브리드 RAG 함수를 가져온다. (Chapter 10-14)
+# utils.hybrid_rag_utils에서 하이브리드 RAG 함수를 가져온다. (Chapter 10-14/15)
 from utils.hybrid_rag_utils import (
     search_hybrid_rag,
     build_hybrid_rag_context,
+    build_hybrid_answer_context,
+    filter_hybrid_results_for_answer,
 )
 
 # .env 파일 로드
@@ -363,6 +365,63 @@ def ask_atflee_bot(user_question, rag_context, source_files):
     )
 
     return response.content[0].text, get_usage_dict(response.usage)
+
+
+def ask_claude_with_atflee_hybrid_bot(question, hybrid_results):
+    """
+    하이브리드 검색 결과를 근거로 앳플리 봇이 답변한다. (Chapter 10-15)
+    build_hybrid_answer_context 로 overlap/upstage 우선 근거를 선별해 Claude에 전달한다.
+    """
+    hybrid_rag_context = build_hybrid_answer_context(hybrid_results)
+
+    system_prompt = """
+# Role
+너는 앳플리 봇이다.
+
+# Goal
+사용자 질문에 대해 앳플리 위키와 정책 문서를 근거로 쉽고 안전하게 답변한다.
+
+# Context
+검색 결과는 키워드 검색과 Upstage 의미 검색을 결합한 하이브리드 RAG 결과다.
+단, 답변에는 검색 결과 중 근거성이 높은 문서와 청크만 사용한다.
+
+# Rules
+- <hybrid_rag_context>에 있는 정보만 확정적으로 말한다.
+- Context에 없는 내용은 추측하지 않는다.
+- 실제 주문 상태, 배송 상태, AS 접수 상태를 지어내지 않는다.
+- 가격, 재고, 품절, 이벤트, 프로모션은 변동될 수 있으므로 단정하지 않는다.
+- 개인정보, 주문번호, 연락처, 주소 등 민감정보는 공개 채팅에 입력하지 않도록 안내한다.
+- chunk_id가 None이면 "문서 단위 검색 결과"라고 표시한다.
+- 답변 마지막에는 참고한 source_file과 chunk_id를 표시한다.
+- 검색 결과가 부족하면 "정확한 확인이 필요합니다"라고 말한다.
+
+# Output Format
+아래 형식으로 답변한다.
+
+1. 간단한 답변
+2. 근거가 되는 앳플리 정보
+3. 바로 해볼 수 있는 것
+4. 확인이 필요한 것
+5. 참고 문서/청크
+"""
+
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=1200,
+        temperature=0.2,
+        system=system_prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"<hybrid_rag_context>\n{hybrid_rag_context}\n</hybrid_rag_context>\n\n"
+                    f"<user_question>\n{question}\n</user_question>"
+                )
+            }
+        ]
+    )
+
+    return response.content[0].text
 
 
 def call_ax_tutor(messages):
@@ -923,12 +982,25 @@ AS 문의도 남겼는데 답변이 늦어서 너무 답답합니다."""
 
 
 # =========================
-# 4. 앳플리 봇 탭
+# 4. 앳플리 봇 탭 (Chapter 10-15: 하이브리드 RAG 승격)
 # =========================
 with tab_atflee:
     st.subheader("앳플리 봇")
-    st.write("질문과 관련 있는 data/wiki 문서를 검색해 답변합니다.")
+    st.write("키워드 검색과 의미 기반 검색을 함께 사용해 data/wiki 문서를 찾고, 근거 기반으로 답변합니다.")
     st.info("현재 앳플리 봇은 data/wiki 문서와 공식몰 공개 정보를 바탕으로 답변합니다.")
+
+    # 하이브리드 RAG 사용 가능 여부를 미리 판단한다.
+    _atflee_upstage_key    = get_upstage_api_key()
+    _atflee_index_status   = get_upstage_index_status()
+    _atflee_hybrid_enabled = bool(_atflee_upstage_key) and _atflee_index_status["exists"]
+
+    if _atflee_hybrid_enabled:
+        st.caption(
+            f"검색 방식: 하이브리드 RAG (키워드 + Upstage) / "
+            f"인덱스 청크: {_atflee_index_status['chunk_count']}개"
+        )
+    else:
+        st.caption("검색 방식: 키워드 RAG (Upstage 설정 없음)")
 
     if "atflee_bot_messages" not in st.session_state:
         st.session_state.atflee_bot_messages = []
@@ -957,50 +1029,118 @@ with tab_atflee:
         with st.chat_message("assistant"):
             with st.spinner("앳플리 봇이 답변 중입니다..."):
                 try:
-                    # 1단계: 질문과 관련 있는 문서를 검색한다.
-                    atflee_search_results = search_wiki(atflee_user_input, top_k=TOP_K)
+                    if _atflee_hybrid_enabled:
+                        # ──────────────────────────────────────────
+                        # 하이브리드 RAG 경로 (Chapter 10-15)
+                        # ──────────────────────────────────────────
+                        _atflee_hyb_payload = search_hybrid_rag(
+                            question=atflee_user_input,
+                            upstage_api_key=_atflee_upstage_key,
+                            top_k=3
+                        )
 
-                    if not atflee_search_results:
-                        st.warning("data/wiki 폴더에 문서가 없어 답변을 생성할 수 없습니다.")
+                        _atflee_hyb_error   = _atflee_hyb_payload.get("error")
+                        _atflee_hyb_results = _atflee_hyb_payload.get("hybrid_results", [])
+
+                        if _atflee_hyb_error:
+                            st.warning(
+                                f"Upstage 검색에 오류가 있어 키워드 검색 결과를 보충합니다: {_atflee_hyb_error}"
+                            )
+
+                        if not _atflee_hyb_results:
+                            st.warning("검색 결과가 없어 답변을 생성할 수 없습니다.")
+                        else:
+                            # 답변 근거 선별 (overlap > upstage_only > keyword_only)
+                            _atflee_answer_basis = filter_hybrid_results_for_answer(
+                                _atflee_hyb_results, max_items=3
+                            )
+
+                            # Claude 하이브리드 RAG 답변 생성
+                            atflee_reply = ask_claude_with_atflee_hybrid_bot(
+                                atflee_user_input, _atflee_hyb_results
+                            )
+                            st.write(atflee_reply)
+
+                            # 검색 근거 expander
+                            with st.expander("검색 근거 보기"):
+                                st.markdown(
+                                    "**사용한 검색 방식:** 하이브리드 RAG "
+                                    "(키워드 + Upstage Embedding)"
+                                )
+                                st.divider()
+
+                                st.markdown("**하이브리드 최종 TOP 3**")
+                                for _hrank, _hr in enumerate(_atflee_hyb_results, start=1):
+                                    _cl = _hr.get("chunk_id") or "문서 단위 결과"
+                                    st.markdown(
+                                        f"**{_hrank}위** `{_hr['source_file']}` / "
+                                        f"`{_cl}` / "
+                                        f"hybrid_score: `{_hr['hybrid_score']:.4f}` / "
+                                        f"sources: `{', '.join(_hr['sources'])}`"
+                                    )
+                                    if _hr.get("text"):
+                                        st.caption(_hr["text"][:200])
+                                    st.divider()
+
+                                st.markdown("**Claude 답변에 실제 사용한 근거**")
+                                for _br in _atflee_answer_basis:
+                                    _bl = _br.get("chunk_id") or "문서 단위 결과"
+                                    st.markdown(
+                                        f"- `{_br['source_file']}` / `{_bl}` / "
+                                        f"sources: `{', '.join(_br['sources'])}`"
+                                    )
+
+                            st.session_state.atflee_bot_messages.append(
+                                {
+                                    "role": "assistant",
+                                    "content": atflee_reply
+                                }
+                            )
+
                     else:
-                        # 2단계: 검색된 문서만 RAG Context로 합친다.
-                        atflee_rag_context = build_rag_context(atflee_search_results)
-                        atflee_source_files = get_source_file_names(atflee_search_results)
+                        # ──────────────────────────────────────────
+                        # 키워드 RAG fallback (Upstage 설정 없음)
+                        # ──────────────────────────────────────────
+                        st.info("현재 Upstage RAG 설정이 없어 키워드 기반 앳플리 봇으로 답변합니다.")
 
-                        # 검색된 참고 문서와 관련 스니펫을 expander로 표시한다.
-                        with st.expander("검색된 참고 문서"):
-                            for result in atflee_search_results:
-                                st.markdown(f"**{result['file_name']}** / 점수: {result['score']}")
-                                st.caption(result.get("snippet", ""))
+                        atflee_search_results = search_wiki(atflee_user_input, top_k=TOP_K)
 
-                        # 3단계: 검색된 문서를 Claude에게 전달해 답변을 받는다.
-                        atflee_reply, atflee_usage = ask_atflee_bot(
-                            atflee_user_input, atflee_rag_context, atflee_source_files
-                        )
-                        st.write(atflee_reply)
+                        if not atflee_search_results:
+                            st.warning("data/wiki 폴더에 문서가 없어 답변을 생성할 수 없습니다.")
+                        else:
+                            atflee_rag_context  = build_rag_context(atflee_search_results)
+                            atflee_source_files = get_source_file_names(atflee_search_results)
 
-                        # 4단계: 답변 품질을 체크한다.
-                        atflee_eval = evaluate_rag_answer(atflee_reply, atflee_source_files)
-                        with st.expander("답변 품질 체크"):
-                            st.write(f"점수: {atflee_eval['score']}점 / 상태: {atflee_eval['status']}")
-                            for check in atflee_eval["checks"]:
-                                if check["passed"]:
-                                    st.success(f"✔ {check['name']}: {check['message']}")
-                                else:
-                                    st.warning(f"△ {check['name']}: {check['message']}")
+                            with st.expander("검색된 참고 문서"):
+                                for result in atflee_search_results:
+                                    st.markdown(f"**{result['file_name']}** / 점수: {result['score']}")
+                                    st.caption(result.get("snippet", ""))
 
-                        # 5단계: 프롬프트 캐싱 사용량을 표시한다.
-                        render_usage_expander(atflee_usage)
-                        st.caption(
-                            "반복되는 문서 Context는 Prompt Caching을 통해 비용 효율을 높일 수 있습니다."
-                        )
+                            atflee_reply, atflee_usage = ask_atflee_bot(
+                                atflee_user_input, atflee_rag_context, atflee_source_files
+                            )
+                            st.write(atflee_reply)
 
-                        st.session_state.atflee_bot_messages.append(
-                            {
-                                "role": "assistant",
-                                "content": atflee_reply
-                            }
-                        )
+                            atflee_eval = evaluate_rag_answer(atflee_reply, atflee_source_files)
+                            with st.expander("답변 품질 체크"):
+                                st.write(f"점수: {atflee_eval['score']}점 / 상태: {atflee_eval['status']}")
+                                for check in atflee_eval["checks"]:
+                                    if check["passed"]:
+                                        st.success(f"✔ {check['name']}: {check['message']}")
+                                    else:
+                                        st.warning(f"△ {check['name']}: {check['message']}")
+
+                            render_usage_expander(atflee_usage)
+                            st.caption(
+                                "반복되는 문서 Context는 Prompt Caching을 통해 비용 효율을 높일 수 있습니다."
+                            )
+
+                            st.session_state.atflee_bot_messages.append(
+                                {
+                                    "role": "assistant",
+                                    "content": atflee_reply
+                                }
+                            )
 
                 except Exception as error:
                     st.error(f"앳플리 봇 답변 생성 중 오류가 발생했습니다: {error}")

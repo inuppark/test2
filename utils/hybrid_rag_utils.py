@@ -5,11 +5,13 @@ utils/hybrid_rag_utils.py
 하이브리드 RAG 공통 유틸리티.
 
 제공 함수:
-  normalize_keyword_results  — search_wiki 결과를 표준 형태로 변환
-  normalize_upstage_results  — Upstage 검색 결과를 표준 형태로 변환
-  merge_hybrid_results       — 두 결과 병합 + hybrid_score 계산 + TOP K 반환
-  search_hybrid_rag          — 키워드 + Upstage 검색 통합 실행
-  build_hybrid_rag_context   — Claude 전달용 context 문자열 생성
+  normalize_keyword_results        — search_wiki 결과를 표준 형태로 변환
+  normalize_upstage_results        — Upstage 검색 결과를 표준 형태로 변환
+  merge_hybrid_results             — 두 결과 병합 + hybrid_score 계산 + TOP K 반환
+  search_hybrid_rag                — 키워드 + Upstage 검색 통합 실행
+  build_hybrid_rag_context         — Claude 전달용 context 문자열 생성 (비교/표시용)
+  filter_hybrid_results_for_answer — Claude 답변 근거를 overlap > upstage > keyword 순으로 선별
+  build_hybrid_answer_context      — 선별된 결과로 Claude 답변용 context 문자열 생성
 
 점수 계산:
   keyword_weight = 0.4  (Reciprocal Rank 기반 정규화 점수)
@@ -238,11 +240,12 @@ def search_hybrid_rag(question, upstage_api_key, top_k=DEFAULT_TOP_K):
 
 
 # ==============================
-# 함수 5: Claude 전달용 context 생성
+# 함수 5: Claude 전달용 context 생성 (비교/표시용)
 # ==============================
 def build_hybrid_rag_context(hybrid_results):
     """
     Claude에게 전달할 하이브리드 RAG context를 만든다.
+    전체 hybrid_results를 그대로 사용한다. 비교/실험 탭용.
     """
     context_parts = []
 
@@ -256,3 +259,60 @@ def build_hybrid_rag_context(hybrid_results):
         )
 
     return "\n\n---\n\n".join(context_parts)
+
+
+# ==============================
+# 함수 6: 답변용 근거 문서 선별 (Chapter 10-15)
+# ==============================
+def filter_hybrid_results_for_answer(hybrid_results, max_items=3):
+    """
+    Claude 답변에 넘길 근거 문서를 선별한다.
+
+    우선순위:
+    1. keyword와 upstage 양쪽에 모두 등장한 결과 (overlap)
+    2. upstage only 결과
+    3. keyword only 결과는 위 결과가 부족할 때만 보충
+
+    이유:
+    keyword only 결과는 질문 단어가 우연히 겹친 노이즈일 수 있다.
+    Upstage 결과는 의미 기반 청크 본문을 포함하므로 답변 근거로 더 적합하다.
+    """
+    overlap_items     = []
+    upstage_only_items = []
+    keyword_only_items = []
+
+    for item in hybrid_results:
+        sources = item.get("sources", [])
+
+        if "keyword" in sources and "upstage" in sources:
+            overlap_items.append(item)
+        elif "upstage" in sources:
+            upstage_only_items.append(item)
+        else:
+            keyword_only_items.append(item)
+
+    selected = []
+
+    for group in [overlap_items, upstage_only_items, keyword_only_items]:
+        for item in group:
+            if len(selected) >= max_items:
+                break
+            selected.append(item)
+
+        if len(selected) >= max_items:
+            break
+
+    return selected
+
+
+# ==============================
+# 함수 7: Claude 답변용 context 생성 (Chapter 10-15)
+# ==============================
+def build_hybrid_answer_context(hybrid_results, max_items=3):
+    """
+    Claude 답변에 실제 사용할 근거 문서만 선별해 context 문자열로 만든다.
+    overlap > upstage_only > keyword_only 순서로 선택하므로
+    키워드 전용 노이즈 문서가 Claude context에 과도하게 들어가지 않는다.
+    """
+    selected_results = filter_hybrid_results_for_answer(hybrid_results, max_items=max_items)
+    return build_hybrid_rag_context(selected_results)
