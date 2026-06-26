@@ -228,8 +228,91 @@ async with Client(SERVER_PATH) as client:
 
 ### 다음 단계: 11-4
 
-Claude `tool_use` API와 MCP 서버를 연결하는 에이전트:
-- Claude에게 MCP 서버 도구 스키마를 `tools=[]`로 전달
-- Claude가 `tool_use` 블록으로 도구를 선택
-- Python이 MCP 클라이언트로 해당 도구를 실행하고 `tool_result`로 반환
-- Claude가 최종 답변 생성
+Claude tool_use + MCP 에이전트 → `04_atflee_claude_mcp_tool_agent.py` 참고
+
+---
+
+## 11-4 Claude + MCP Tool Agent
+
+### 목적
+
+Claude `tool_use` API와 앳플리 MCP 서버를 연결한다.
+Claude가 필요한 도구를 `tool_use` 블록으로 선택하면 Python이 FastMCP Client로 실행하고,
+`tool_result`를 Claude에게 반환해 최종 답변을 생성하는 에이전트 구조를 완성한다.
+
+---
+
+### 생성 파일
+
+| 파일 | 설명 |
+|---|---|
+| `chapters/chapter11/04_atflee_claude_mcp_tool_agent.py` | Claude tool_use + FastMCP Client 에이전트 |
+
+---
+
+### 사용 MCP 서버
+
+`chapters/chapter11/02_atflee_mcp_server_basic.py` (stdio로 자동 실행)
+
+---
+
+### 에이전트 흐름
+
+```
+사용자 질문
+  ↓
+[1차 Claude 호출] tools=TOOLS 스키마 전달
+  ↓
+Claude → stop_reason: tool_use
+  ↓
+Python → FastMCP Client.call_tool(도구명, 입력)
+  ↓
+MCP 서버 실행 → 결과 반환
+  ↓
+[2차 Claude 호출] tool_result 전달
+  ↓
+Claude → 최종 답변 생성 (6단계 형식)
+```
+
+---
+
+### 테스트 질문별 결과
+
+| 질문 | Claude 선택 도구 | tool_use 수 |
+|---|---|---|
+| 체중계 앱 연결 안 됨 | `search_atflee_wiki` | 1 |
+| 제품 불량 교환 + VOC 분류 | `search_atflee_wiki` + `classify_atflee_voc` | **2** |
+| AS 접수 확인 | `search_atflee_wiki` | 1 |
+| MCP 도구 목록 알려줘 | `list_atflee_tools` | 1 |
+
+---
+
+### 실행 명령어
+
+```bash
+python chapters/chapter11/04_atflee_claude_mcp_tool_agent.py
+```
+
+사전 조건:
+- `.env`에 `ANTHROPIC_API_KEY` 설정
+- `pip install fastmcp anthropic python-dotenv` 완료
+- `data/wiki/*.md` 파일 존재
+
+---
+
+### 11-3 MCP Client vs 11-4 Claude + MCP Agent 차이
+
+| 항목 | 11-3 MCP Client | 11-4 Claude + MCP Agent |
+|---|---|---|
+| 도구 선택 주체 | Python 코드가 직접 `call_tool()` 호출 | Claude가 `tool_use` 블록으로 자율 선택 |
+| 흐름 | 고정된 순서로 4개 도구 순차 호출 | 질문에 따라 필요한 도구 0~N개 선택 |
+| Claude 역할 | 없음 (도구 실행 후 결과 저장) | 도구 선택 + 결과를 종합한 최종 답변 생성 |
+
+---
+
+### 다음 단계: 11-5
+
+- **(A) AX Console 연동**: `ax_console_v0.py`에 MCP 서버 연동 탭 추가
+- **(B) Claude Desktop 연동**: `claude_desktop_config.json`에 앳플리 MCP 서버 등록
+
+두 방향 모두 가능하며, Claude Desktop 연동이 더 빠른 체감 가능 경로다.
