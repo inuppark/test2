@@ -820,18 +820,19 @@ def render_saved_result_detail(saved_data, file_name="result.json", download_key
 # =========================
 
 st.title("앳플리 AX Console v0")
-st.caption("VOC 분석, CS 답변 초안, AX 학습 챗봇을 하나의 화면에서 실험하는 초기 콘솔입니다.")
+st.caption("앳플리봇 · VOC 분석 · CS 답변 초안 · Tool Use Agent · 하이브리드 RAG · AX 학습 챗봇")
 
-tab_chat, tab_voc, tab_cs, tab_atflee, tab_tool_agent, tab_vector_rag, tab_upstage_rag, tab_hybrid_rag = st.tabs(
-    ["AX 학습 챗봇", "VOC 분석", "CS 답변 초안", "앳플리 봇", "Tool Use Agent", "벡터 RAG", "Upstage RAG", "하이브리드 RAG"]
+tab_atflee, tab_voc, tab_cs, tab_tool_agent, tab_hybrid_rag, tab_chat = st.tabs(
+    ["앳플리봇", "VOC 분석", "CS 답변 초안", "Tool Use Agent", "하이브리드 RAG", "AX 학습 챗봇"]
 )
 
 
 # =========================
-# 1. AX 학습 챗봇 탭
+# 6. AX 학습 챗봇 탭 (내부 학습용)
 # =========================
 with tab_chat:
     st.subheader("AX 학습 챗봇")
+    st.caption("내부 학습용 — AX, Claude API, Streamlit, RAG, Tool Use 학습을 위한 챗봇입니다.")
     st.write("Claude API, Streamlit, VOC Agent, RAG, LangGraph, 앳플리 AX 프로젝트에 대해 질문할 수 있습니다.")
 
     if "ax_chat_messages" not in st.session_state:
@@ -839,6 +840,8 @@ with tab_chat:
 
     with st.sidebar:
         st.header("AX Console 설정")
+        st.caption("현재 앳플리봇은 하이브리드 RAG 기반으로 답변합니다.")
+        st.divider()
         st.write("AX 챗봇 대화 수:", len(st.session_state.ax_chat_messages))
 
         if st.button("AX 챗봇 대화 초기화"):
@@ -879,10 +882,11 @@ with tab_chat:
 
 
 # =========================
-# 2. VOC 분석 탭
+# 2. VOC 분석 탭 (앳플리 직원용)
 # =========================
 with tab_voc:
     st.subheader("VOC 분석")
+    st.caption("앳플리 직원용 — 고객 문의를 분류하고 후속 조치를 정리합니다.")
     st.write("고객 문의를 입력하면 이슈 유형, 심각도, 담당 부서, 다음 액션을 분석합니다.")
 
     sample_voc = """체중계가 앱이랑 계속 연결이 안 됩니다.
@@ -950,10 +954,11 @@ AS 문의도 남겼는데 답변이 늦어서 너무 답답합니다."""
 
 
 # =========================
-# 3. CS 답변 초안 탭
+# 3. CS 답변 초안 탭 (앳플리 직원용)
 # =========================
 with tab_cs:
     st.subheader("CS 답변 초안")
+    st.caption("앳플리 직원용 — 생성된 답변은 발송 전 담당자 검토가 필요합니다.")
     st.write("고객 문의를 바탕으로 고객에게 보낼 수 있는 정중한 답변 초안을 생성합니다.")
 
     sample_cs = """체중계가 앱이랑 계속 연결이 안 됩니다.
@@ -982,12 +987,14 @@ AS 문의도 남겼는데 답변이 늦어서 너무 답답합니다."""
 
 
 # =========================
-# 4. 앳플리 봇 탭 (Chapter 10-15: 하이브리드 RAG 승격)
+# 1. 앳플리봇 탭 (하이브리드 RAG 기반, Chapter 10-15)
 # =========================
 with tab_atflee:
-    st.subheader("앳플리 봇")
-    st.write("키워드 검색과 의미 기반 검색을 함께 사용해 data/wiki 문서를 찾고, 근거 기반으로 답변합니다.")
-    st.info("현재 앳플리 봇은 data/wiki 문서와 공식몰 공개 정보를 바탕으로 답변합니다.")
+    st.subheader("앳플리봇")
+    st.caption("고객용 안내 봇 후보입니다.")
+    st.write("제품, 앱, 배송, 교환/반품/AS 관련 질문에 대해 앳플리 위키와 정책 문서를 근거로 안내합니다.")
+    st.warning("주문번호, 연락처, 주소 등 개인정보는 공개 채팅에 입력하지 마세요.")
+    st.info("실제 주문/배송/AS 접수 상태는 고객센터 또는 마이페이지에서 확인이 필요합니다.")
 
     # 하이브리드 RAG 사용 가능 여부를 미리 판단한다.
     _atflee_upstage_key    = get_upstage_api_key()
@@ -1147,10 +1154,11 @@ with tab_atflee:
 
 
 # =========================
-# 5. Tool Use Agent 탭
+# 4. Tool Use Agent 탭 (내부 실험/관리자용)
 # =========================
 with tab_tool_agent:
     st.subheader("앳플리 Tool Use Agent")
+    st.caption("내부 실험/관리자용 — 도구 호출과 구조화 처리를 검증합니다.")
     st.write(
         "고객 문의를 입력하면 Claude가 필요한 도구를 사용해 "
         "VOC 분류, 앳플리 위키 검색, 구조화 JSON 생성을 수행합니다."
@@ -1317,9 +1325,10 @@ AS 문의를 남겼는데 답변이 너무 늦어서 화가 납니다."
 
 
 # =========================
-# 6. 벡터 RAG 탭 (Chapter 10-6)
+# Chapter 10 학습용 legacy UI — 현재 화면에서는 숨김
+# 벡터 RAG 탭 (Chapter 10-6)
 # =========================
-with tab_vector_rag:
+if False:  # tab_vector_rag 는 st.tabs()에서 제외됩니다. 코드와 유틸은 유지합니다.
     st.subheader("앳플리 벡터 RAG")
     st.write(
         "TF-IDF 벡터 검색으로 data/wiki 청크를 찾고, "
@@ -1450,9 +1459,10 @@ with tab_vector_rag:
 
 
 # =========================
-# 7. Upstage RAG 탭 (Chapter 10-12)
+# Chapter 10 학습용 legacy UI — 현재 화면에서는 숨김
+# Upstage RAG 탭 (Chapter 10-12)
 # =========================
-with tab_upstage_rag:
+if False:  # tab_upstage_rag 는 st.tabs()에서 제외됩니다. 코드와 유틸은 유지합니다.
     st.subheader("앳플리 Upstage RAG")
     st.write(
         "Upstage Embedding으로 data/wiki 청크를 의미 기반 검색하고, "
@@ -1556,15 +1566,16 @@ with tab_upstage_rag:
 
 
 # =========================
-# 8. 하이브리드 RAG 탭 (Chapter 10-14)
+# 5. 하이브리드 RAG 탭 (관리자/개발자 검증용, Chapter 10-14)
 # =========================
 with tab_hybrid_rag:
     st.subheader("앳플리 하이브리드 RAG")
+    st.caption("관리자/개발자 검증용 — 키워드 검색과 Upstage 의미 검색의 근거를 비교합니다.")
     st.write(
         "키워드 검색과 Upstage Embedding 검색을 함께 사용해 "
         "더 안정적인 근거 문서를 찾고, Claude가 답변합니다."
     )
-    st.info("이 탭은 Chapter 10 선택 실습용입니다. Upstage API 호출 비용이 발생할 수 있습니다.")
+    st.info("Upstage API 호출 비용이 발생할 수 있습니다.")
 
     with st.expander("하이브리드 검색이란?"):
         st.markdown(
