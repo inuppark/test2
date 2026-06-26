@@ -33,10 +33,11 @@ CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data", "rag", "atflee_wiki_chunks.json
 OUTPUT_PATH = os.path.join(PROJECT_ROOT, "data", "rag", "atflee_upstage_embedding_index.json")
 
 # Upstage Embedding API 설정
-# 모델명이나 URL이 변경된 경우 Upstage 공식 문서를 확인한다.
-# https://console.upstage.ai/docs/capabilities/embeddings
-UPSTAGE_EMBEDDING_URL   = "https://api.upstage.ai/v1/solar/embeddings"
-UPSTAGE_EMBEDDING_MODEL = "solar-embedding-1-large"
+# 2026년 기준 모델명이 쿼리용/문서용으로 분리됐다.
+# 최신 모델 목록: https://console.upstage.ai/docs/models
+UPSTAGE_EMBEDDING_URL    = "https://api.upstage.ai/v1/solar/embeddings"
+UPSTAGE_MODEL_QUERY      = "solar-embedding-1-large-query"    # 질문(query) 임베딩용
+UPSTAGE_MODEL_PASSAGE    = "solar-embedding-1-large-passage"  # 문서/청크(passage) 임베딩용
 
 
 # ==============================
@@ -83,18 +84,23 @@ def load_chunks():
 # ==============================
 # 함수 3: Upstage Embedding API 호출
 # ==============================
-def call_upstage_embedding(text, api_key):
+def call_upstage_embedding(text, api_key, model=None):
     """
     Upstage Embedding API를 호출해 text의 임베딩 벡터(리스트)를 반환한다.
-    API 호출 실패 시 RuntimeError를 발생시킨다.
+    model을 지정하지 않으면 query 모델을 기본으로 사용한다.
+    청크(문서) 임베딩은 UPSTAGE_MODEL_PASSAGE,
+    질문 임베딩은 UPSTAGE_MODEL_QUERY를 전달한다.
     """
+    if model is None:
+        model = UPSTAGE_MODEL_QUERY
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
     payload = {
-        "model": UPSTAGE_EMBEDDING_MODEL,
+        "model": model,
         "input": text
     }
 
@@ -153,7 +159,8 @@ def build_upstage_embedding_index(chunks, api_key, sleep_seconds=0.2):
     for index, chunk in enumerate(chunks, start=1):
         print(f"  [{index}/{total}] 임베딩 생성 중: {chunk['chunk_id']}")
 
-        embedding = call_upstage_embedding(chunk["text"], api_key)
+        # 청크(문서)는 passage 모델로 임베딩한다.
+        embedding = call_upstage_embedding(chunk["text"], api_key, model=UPSTAGE_MODEL_PASSAGE)
 
         indexed_chunks.append(
             {
@@ -173,8 +180,9 @@ def build_upstage_embedding_index(chunks, api_key, sleep_seconds=0.2):
         "created_at":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "project":           "atflee",
         "index_type":        "upstage_embedding",
-        "embedding_model":   UPSTAGE_EMBEDDING_MODEL,
-        "embedding_url":     UPSTAGE_EMBEDDING_URL,
+        "embedding_model_passage": UPSTAGE_MODEL_PASSAGE,
+        "embedding_model_query":   UPSTAGE_MODEL_QUERY,
+        "embedding_url":           UPSTAGE_EMBEDDING_URL,
         "chunk_count":       len(indexed_chunks),
         "embedding_dimension": len(indexed_chunks[0]["embedding"]) if indexed_chunks else 0,
         "chunks":            indexed_chunks
@@ -209,7 +217,8 @@ def search_upstage_embedding(question, index_payload, api_key, top_k=3):
     인덱스의 각 청크 임베딩과 코사인 유사도를 계산해 TOP K를 반환한다.
     """
     print(f"  질문 임베딩 생성 중: {question[:40]}...")
-    query_embedding = call_upstage_embedding(question, api_key)
+    # 질문은 query 모델로 임베딩한다.
+    query_embedding = call_upstage_embedding(question, api_key, model=UPSTAGE_MODEL_QUERY)
 
     results = []
     for chunk in index_payload.get("chunks", []):
@@ -249,8 +258,12 @@ def print_search_results(question, results):
         print(f"  source_file: {result['source_file']}")
         print(f"  chunk_id:    {result['chunk_id']}")
         print("  preview:")
-        # 미리보기는 400자로 제한한다.
-        print("  " + result["text"][:400].replace("\n", "\n  "))
+        # BOM(﻿) 등 Windows 터미널에서 출력 불가한 문자를 제거하고 400자로 제한한다.
+        preview = result["text"].replace("﻿", "")[:400].replace("\n", "\n  ")
+        try:
+            print("  " + preview)
+        except UnicodeEncodeError:
+            print("  " + preview.encode("utf-8", errors="replace").decode("utf-8"))
 
 
 # ==============================
@@ -283,7 +296,8 @@ if __name__ == "__main__":
             print(f"생성 시각: {index_payload.get('created_at')}")
         else:
             print(f"\n[새 Upstage 임베딩 인덱스 생성 시작]")
-            print(f"모델: {UPSTAGE_EMBEDDING_MODEL}")
+            print(f"passage 모델: {UPSTAGE_MODEL_PASSAGE}")
+            print(f"query 모델:   {UPSTAGE_MODEL_QUERY}")
             index_payload = build_upstage_embedding_index(chunks, api_key)
             saved_path = save_embedding_index(index_payload)
 

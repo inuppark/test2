@@ -31,8 +31,9 @@ from utils.vector_rag_utils import search_similar_chunks
 REPORT_DIR         = os.path.join(PROJECT_ROOT, "reports", "chapter10")
 UPSTAGE_INDEX_PATH = os.path.join(PROJECT_ROOT, "data", "rag", "atflee_upstage_embedding_index.json")
 
-UPSTAGE_EMBEDDING_URL   = "https://api.upstage.ai/v1/solar/embeddings"
-UPSTAGE_EMBEDDING_MODEL = "solar-embedding-1-large"
+UPSTAGE_EMBEDDING_URL  = "https://api.upstage.ai/v1/solar/embeddings"
+UPSTAGE_MODEL_QUERY    = "solar-embedding-1-large-query"    # 질문(query) 임베딩용
+UPSTAGE_MODEL_PASSAGE  = "solar-embedding-1-large-passage"  # 문서/청크(passage) 임베딩용
 
 # ==============================
 # 테스트 케이스
@@ -115,18 +116,22 @@ def load_upstage_index():
 # ==============================
 # 함수 3: Upstage Embedding API 호출
 # ==============================
-def call_upstage_embedding(text, api_key):
+def call_upstage_embedding(text, api_key, model=None):
     """
     Upstage Embedding API로 text의 임베딩 벡터를 생성한다.
+    model 미지정 시 query 모델 사용. 청크는 passage 모델을 전달한다.
     API Key는 헤더에만 사용하고 절대 출력하지 않는다.
     """
+    if model is None:
+        model = UPSTAGE_MODEL_QUERY
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
     payload = {
-        "model": UPSTAGE_EMBEDDING_MODEL,
+        "model": model,
         "input": text
     }
 
@@ -215,7 +220,7 @@ def get_upstage_results(question, upstage_index, api_key, top_k=3):
     질문을 Upstage Embedding으로 변환한 뒤
     인덱스 청크와 코사인 유사도를 계산해 TOP K를 반환한다.
     """
-    query_embedding = call_upstage_embedding(question, api_key)
+    query_embedding = call_upstage_embedding(question, api_key, model=UPSTAGE_MODEL_QUERY)
 
     scored = []
     for chunk in upstage_index.get("chunks", []):
