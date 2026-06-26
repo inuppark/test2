@@ -148,7 +148,88 @@ python -m py_compile chapters/chapter11/02_atflee_mcp_server_basic.py
 
 ### 다음 단계: 11-3
 
-MCP 클라이언트 테스트:
-- Python MCP 클라이언트(`fastmcp` 또는 `mcp` SDK)로 이 서버에 연결
-- `search_atflee_wiki`, `classify_atflee_voc`를 클라이언트에서 호출
-- Claude `tool_use` API와 MCP 서버를 연결하는 에이전트 구현
+MCP 클라이언트 테스트 → `03_atflee_mcp_client_test.py` 참고
+
+---
+
+## 11-3 MCP Client Test
+
+### 목적
+
+11-2에서 만든 MCP 서버에 Python MCP 클라이언트로 연결해
+등록된 도구 목록을 확인하고 실제 tool call을 실행한다.
+
+Claude API, ANTHROPIC_API_KEY, UPSTAGE_API_KEY를 사용하지 않는다.
+MCP 서버와 MCP 클라이언트 연결 구조 자체를 이해하는 단계다.
+
+---
+
+### 생성 파일
+
+| 파일 | 설명 |
+|---|---|
+| `chapters/chapter11/03_atflee_mcp_client_test.py` | FastMCP Client로 MCP 서버 tool call 테스트 |
+
+---
+
+### 호출한 도구 (4개)
+
+| 도구 | 입력 | 결과 요약 |
+|---|---|---|
+| `get_atflee_status` | `{}` | status=ready, wiki_doc_count=8 |
+| `list_atflee_tools` | `{}` | 4개 도구 목록 반환 |
+| `search_atflee_wiki` | `{"question": "체중계 앱 연결..."}` | atflee_app_guide.md TOP 1 |
+| `classify_atflee_voc` | `{"customer_message": "제품 불량 교환"}` | 교환/반품 / 높음 / CS/물류팀 |
+
+---
+
+### 실행 명령어
+
+```bash
+# 클라이언트 실행 (서버 자동 실행 후 연결)
+python chapters/chapter11/03_atflee_mcp_client_test.py
+
+# 문법 검증만
+python -m py_compile chapters/chapter11/03_atflee_mcp_client_test.py
+```
+
+사전 조건:
+- `pip install fastmcp` 완료
+- `02_atflee_mcp_server_basic.py` 존재
+- `data/wiki/*.md` 파일 존재
+- 별도 터미널에서 서버를 수동 실행할 필요 없음 (Client(SERVER_PATH)가 stdio로 자동 실행)
+
+---
+
+### 연결 방식
+
+```python
+from fastmcp import Client
+
+async with Client(SERVER_PATH) as client:
+    tools = await client.list_tools()
+    result = await client.call_tool("search_atflee_wiki", {"question": "...", "top_k": 3})
+```
+
+`Client(SERVER_PATH)`에 파일 경로를 넘기면 FastMCP가 해당 스크립트를 stdio 서브프로세스로
+자동 실행하고 JSON-RPC over stdio로 통신한다.
+
+---
+
+### 11-2 MCP Server vs 11-3 MCP Client 차이
+
+| 항목 | 11-2 MCP Server | 11-3 MCP Client |
+|---|---|---|
+| 역할 | 도구를 등록하고 연결 대기 | 서버 도구를 원격 호출하는 소비자 |
+| 실행 흐름 | `mcp.run()`으로 서버 대기 | `async with Client(path):`로 서버 자동 실행 후 연결 |
+| 코드 위치 | `@mcp.tool` 데코레이터 서버 파일 | `await client.call_tool(...)` 클라이언트 파일 |
+
+---
+
+### 다음 단계: 11-4
+
+Claude `tool_use` API와 MCP 서버를 연결하는 에이전트:
+- Claude에게 MCP 서버 도구 스키마를 `tools=[]`로 전달
+- Claude가 `tool_use` 블록으로 도구를 선택
+- Python이 MCP 클라이언트로 해당 도구를 실행하고 `tool_result`로 반환
+- Claude가 최종 답변 생성
