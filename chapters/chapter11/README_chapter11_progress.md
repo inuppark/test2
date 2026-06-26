@@ -391,5 +391,84 @@ python chapters/chapter11/05_atflee_claude_desktop_config_example.py
 
 ### 다음 단계: 11-6
 
-- **(A)** 실제 Claude Desktop에서 앳플리 MCP 도구 연결 테스트 (UI 확인)
-- **(B)** AX Console에 MCP 에이전트 탭 추가 (`ax_console_v0.py` 업데이트)
+Claude Desktop MCP 연결 검증 → `README_claude_desktop_mcp_result.md` 참고
+
+---
+
+## 11-6 Claude Desktop MCP 연결 검증
+
+### 목적
+
+11-2에서 만든 앳플리 MCP 서버 v0가 Claude Desktop에서 정상 인식되고,
+Claude Desktop 채팅창에서 MCP 도구를 직접 호출할 수 있는지 검증했다.
+
+---
+
+### 연결된 MCP 서버
+
+- 서버명: `atflee-mcp-server-v0`
+- 서버 파일: `chapters/chapter11/02_atflee_mcp_server_basic.py`
+- 연결 방식: Claude Desktop `claude_desktop_config.json`의 `mcpServers` 등록
+- 실행 방식: Claude Desktop이 Python MCP 서버를 stdio 방식으로 자동 실행
+
+---
+
+### Claude Desktop에서 확인된 도구
+
+- `get_atflee_status`
+- `list_atflee_tools`
+- `search_atflee_wiki`
+- `classify_atflee_voc`
+
+---
+
+### 테스트 결과
+
+| 질문 | 호출 도구 | 결과 |
+|---|---|---|
+| MCP 도구 목록 알려줘 | `list_atflee_tools` | 4개 도구 목록 확인 |
+| MCP 서버 상태 확인해줘 | `get_atflee_status` | status=ready, wiki_doc_count=8 |
+| 체중계 앱 연결 안 됨 | `search_atflee_wiki` | atflee_app_guide.md 기반 답변 |
+| 제품 불량 교환 VOC 분류 | `classify_atflee_voc` | 교환/반품 / 높음 / CS/물류팀 |
+
+---
+
+### 생성 문서
+
+| 파일 | 설명 |
+|---|---|
+| `chapters/chapter11/README_claude_desktop_mcp_result.md` | 연결 결과 및 한계/확장 후보 정리 |
+
+---
+
+### 의미
+
+앳플리 도구는 더 이상 Python 콘솔 안에서만 실행되는 함수가 아니라,
+Claude Desktop에서 직접 호출 가능한 MCP 도구가 되었다.
+
+```
+11-1 ReAct 콘솔
+  → 11-2 FastMCP 서버
+    → 11-3 Python 클라이언트 연결
+      → 11-4 Claude tool_use 자율 선택
+        → 11-5 Desktop config 예시 생성
+          → 11-6 Claude Desktop 실제 연결 검증 완료
+```
+
+---
+
+### 11-5 vs 11-6 차이
+
+| 항목 | 11-5 | 11-6 |
+|---|---|---|
+| 수행 내용 | Claude Desktop 연결을 위한 config 예시 생성 | 실제 Claude Desktop에서 MCP 서버 로드 및 도구 호출 성공 검증 |
+| 결과물 | `claude_desktop_config_atflee_example.json` | `README_claude_desktop_mcp_result.md` |
+| 상태 | 설정 파일만 준비 | 앳플리 MCP 서버 v0가 Claude Desktop 기반 업무 도구로 사용 가능 |
+
+---
+
+### 다음 단계: 11-7 (후보)
+
+- **(A)** AX Console 핵심 기능을 MCP tool로 승격
+  - `generate_cs_reply`, `hybrid_rag_answer`, `analyze_voc` 등
+- **(B)** Chapter 11 마무리 요약 및 전체 흐름 정리
